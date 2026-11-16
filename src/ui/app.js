@@ -1,6 +1,6 @@
-import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain, parseNum } from '../math/num.js';
+import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain, parseNum, parseDim, unitStr } from '../math/num.js';
 import { toFloat } from '../math/vec.js';
-import { KINDS, BASES, DEFAULT_PARAMS, buildSolid, defaultSpec } from '../geom/solids.js';
+import { KINDS, BASES, DEFAULT_PARAMS, SCALARS, buildSolid, defaultSpec, specUnit } from '../geom/solids.js';
 import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.js';
 import { buildTrace } from '../geom/trace.js';
 import { explain } from '../geom/explain.js';
@@ -298,20 +298,36 @@ view.onHover = (x, y) => {
 
 // ─────────────────────────────── левая панель ───────────────────────────────
 
-/** Числовое значение размера для положения ползунка (сам размер остаётся точным) */
-function approxOf(raw) { try { return parseNum(raw).toNumber(); } catch { return NaN; } }
+/** Числовое значение размера для положения ползунка (сам размер остаётся точным); для «3a/2» — множитель 1,5 */
+function approxOf(raw) { try { return parseDim(raw).v.toNumber(); } catch { return NaN; } }
+
+/**
+ * После смены фигуры или основания появляются поля со значениями по умолчанию — числами.
+ * Если остальные размеры буквенные, записываем их через ту же букву: 3 → 3a.
+ */
+function harmonize(spec) {
+  const u = specUnit(spec);
+  if (!u) return spec;
+  const p = { ...spec.p };
+  for (const [key, , mode] of KINDS[spec.kind].params(spec)) {
+    if (mode === 'pts' || SCALARS.includes(key)) continue;
+    try { const d = parseDim(p[key] ?? DEFAULT_PARAMS[key]); if (!d.sym && !d.v.isZero()) p[key] = fmtNum(d.v, u); } catch { /* оставляем как есть */ }
+  }
+  return { ...spec, p };
+}
 
 /** Ползунок шагает по «хорошим» дробям, поэтому значения остаются точными */
-function sliderHtml(key, mode, raw, label) {
+function sliderHtml(key, mode, raw, label, unit) {
   const v = approxOf(raw);
   const [min, max, step] = mode === 'any' ? [-10, 10, 0.25] : key === 'k' ? [0.05, 2, 0.05] : [0.25, 12, 0.25];
   const hi = Number.isFinite(v) ? Math.max(max, Math.ceil(v)) : max, lo = Number.isFinite(v) ? Math.min(min, Math.floor(v)) : min;
-  return `<input type="range" data-slide="${key}" min="${mode === 'any' ? lo : min}" max="${hi}" step="${step}" value="${Number.isFinite(v) ? v : min}" aria-label="${esc(label)}: ползунок">`;
+  return `<input type="range" data-slide="${key}" min="${mode === 'any' ? lo : min}" max="${hi}" step="${step}" value="${Number.isFinite(v) ? v : min}" aria-label="${esc(label)}: ${unit ? `ползунок множителя при ${unit}` : 'ползунок'}"${unit ? ` title="Множитель при ${unit}"` : ''}>`;
 }
 
 function renderFigure() {
   const s = state.spec, k = KINDS[s.kind];
   const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
+  const unit = specUnit(s);
   let html = `<label class="field"><span>Фигура</span><select data-spec="kind">${Object.entries(KINDS).map(([v, x]) => opt(v, x.title, s.kind)).join('')}</select></label>`;
   if (k.bases) html += `<label class="field"><span>Основание</span><select data-spec="base">${k.bases.map((b) => opt(b, BASES[b].title, s.base)).join('')}</select></label>`;
   if (k.tilt) html += `<label class="field"><span>Боковые рёбра</span><select data-spec="tilt">${opt('right', 'перпендикулярны основанию (прямая)', s.tilt || 'right')}${opt('oblique', 'наклонные (наклонная призма)', s.tilt)}</select></label>`;
@@ -325,20 +341,23 @@ function renderFigure() {
     const raw = s.p[key] ?? DEFAULT_PARAMS[key];
     return mode === 'pts'
       ? `<label class="field wide"><span>${esc(label)}</span><textarea data-param="${key}" rows="3" spellcheck="false">${esc(raw)}</textarea></label>`
-      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${esc(raw)}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, raw, label)}</label>`;
+      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${esc(raw)}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, raw, label, SCALARS.includes(key) ? null : unit)}</label>`;
   }).join('') + '</div>';
-  html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code>.</p>';
+  html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code> — или буквой: <code>a</code>, <code>2a</code>, <code>a/2</code>, <code>a√3</code>. С буквой все размеры должны быть пропорциональны ей, а ответы получатся в виде <code>a√3/2</code>, <code>a²√3/4</code>.</p>';
+  if (unit) html += `<p class="fine">Ползунки меняют множитель при ${esc(unit)}.</p>`;
   $('#figure').innerHTML = html;
 }
 
-function valHtml(v) {
-  return `<b>${esc(fmtVal(v))}</b>${isPlain(v) ? '' : ` <span class="approx">≈ ${fmtApprox(valToNumber(v))}</span>`}`;
+function valHtml(v, deg) {
+  const u = unitStr(solid.unit, deg);
+  return `<b>${esc(fmtVal(v, u))}</b>${isPlain(v) ? '' : ` <span class="approx">≈ ${fmtApprox(valToNumber(v))}${u ? '·' + esc(u) : ''}</span>`}`;
 }
 
 function renderFigureInfo() {
   $('#figure-info').innerHTML = specError
     ? `<p class="err">${esc(specError)}</p>`
-    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface)}</dd></dl>`
+    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}</dd></dl>`
+      + (solid.unit ? `<p class="fine">Размеры заданы буквой: считаем, что ${esc(solid.unit)} > 0 — произвольная положительная длина. Ответы точны при любом таком ${esc(solid.unit)}.</p>` : '')
       + (solid.baseCoords && (state.spec.apex === 'custom' || state.spec.tilt === 'oblique' || state.spec.base === 'poly')
         ? `<p class="fine coords">Координаты основания: ${esc(solid.baseCoords)}</p>` : '');
 }
@@ -384,7 +403,7 @@ function unfoldSvg(sec) {
   q.forEach((p, i) => {
     const a = out(p, 13), nx = q[(i + 1) % q.length], m = out([(p[0] + nx[0]) / 2, (p[1] + nx[1]) / 2], 14);
     s += `<text class="v" x="${a[0].toFixed(1)}" y="${a[1].toFixed(1)}">${esc(sec.names[i])}</text>`;
-    s += `<text class="s" x="${m[0].toFixed(1)}" y="${m[1].toFixed(1)}">${esc(fmtVal(sec.sides[i]))}</text>`;
+    s += `<text class="s" x="${m[0].toFixed(1)}" y="${m[1].toFixed(1)}">${esc(fmtVal(sec.sides[i], unitStr(solid.unit, 1)))}</text>`;
   });
   return `<figure class="unfold"><svg viewBox="0 0 ${W} ${H}">${s}</svg><figcaption>Сечение в натуральную величину; подписаны длины сторон</figcaption></figure>`;
 }
@@ -490,7 +509,7 @@ $('#figure').addEventListener('input', (e) => {
   const key = e.target.dataset.slide;
   if (!key) return;
   if (!sliding) { commit(); sliding = true; }
-  const value = fmtNum(parseNum(e.target.value));
+  const value = fmtNum(parseNum(e.target.value), SCALARS.includes(key) ? '' : specUnit(state.spec) || '');
   state.spec = { ...state.spec, p: { ...state.spec.p, [key]: value } };
   $(`#figure [data-param="${key}"]`).value = value;
   refresh();
@@ -510,6 +529,7 @@ $('#figure').addEventListener('change', (e) => {
     else state.spec = { ...state.spec, [key]: t.value };
     if (key === 'kind' || key === 'base') { state.items = []; resetUi(); }
     if (key === 'base') state.spec.apex = 'center';
+    state.spec = harmonize(state.spec);
     ui.tool = null; ui.picked = [];
     refresh(true);
   } else if (t.dataset.param) {

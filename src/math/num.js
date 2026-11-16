@@ -252,28 +252,39 @@ function overCommonDen(x) {
   return { num, den };
 }
 
-function numeratorStr(num) {
+const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+
+/** Буквенный множитель: a, a², a³… (пустая строка, если буквы нет или степень нулевая) */
+export function unitStr(sym, deg) {
+  if (!sym || !deg) return '';
+  if (deg === 1) return sym;
+  return sym + (deg < 0 ? '⁻' : '') + String(Math.abs(deg)).replace(/\d/g, (d) => SUP[d]);
+}
+
+function numeratorStr(num, unit = '') {
   let s = '';
   num.forEach(([r, c], i) => {
     const a = abs(c);
-    const body = r === 1n ? `${a}` : `${a === 1n ? '' : a}√${r}`;
+    const body = (a === 1n && (r !== 1n || unit) ? '' : `${a}`) + unit + (r === 1n ? '' : `√${r}`);
     if (i === 0) s += (c < 0n ? '−' : '') + body;
     else s += (c < 0n ? ' − ' : ' + ') + body;
   });
   return s;
 }
 
-export function fmtNum(x) {
+/** unit — буквенный множитель (см. unitStr): fmtNum(3√3/4, 'a²') = «3a²√3/4» */
+export function fmtNum(x, unit = '') {
   if (x.isZero()) return '0';
   const { num, den } = overCommonDen(x);
+  const tail = den === 1n ? '' : `/${den}`;
+  if (num.length === 1) return numeratorStr(num, unit) + tail;
   const s = numeratorStr(num);
-  if (den === 1n) return s;
-  return num.length === 1 ? `${s}/${den}` : `(${s})/${den}`;
+  return unit || tail ? `${unit}(${s})${tail}` : s;
 }
 
-export function fmtVal(v) {
-  if (v instanceof Num) return fmtNum(v);
-  if (v.sum) return v.sum.map(fmtVal).join(' + ');
+export function fmtVal(v, unit = '') {
+  if (v instanceof Num) return fmtNum(v, unit);
+  if (v.sum) { const s = v.sum.map((t) => fmtVal(t)).join(' + '); return unit ? `${unit}(${s})` : s; }
   // √x, x не упрощается: выносим рациональный множитель
   const { num, den } = overCommonDen(v.root);
   let g = 0n;
@@ -283,7 +294,7 @@ export function fmtVal(v) {
   const inner = new Num(new Map(num.map(([r, c]) => [r, [c / g, 1n]]))).mul(Num.frac(t));
   const coef = norm(s, den);
   const body = `√(${fmtNum(inner)})`;
-  return (coef[0] === 1n ? '' : `${coef[0]}`) + body + (coef[1] === 1n ? '' : `/${coef[1]}`);
+  return (coef[0] === 1n ? '' : `${coef[0]}`) + unit + body + (coef[1] === 1n ? '' : `/${coef[1]}`);
 }
 
 export function fmtApprox(x, digits = 4) {
@@ -297,68 +308,103 @@ export function fmtApprox(x, digits = 4) {
 export function isPlain(v) { return v instanceof Num && v.isInteger(); }
 
 // ─────────────────────────────── Разбор ввода ───────────────────────────────
-// Понимает: 3, 1.5, 1,5, 3/2, 2√3, sqrt(2), (1+√5)/2, 2^3
+// Понимает: 3, 1.5, 1,5, 3/2, 2√3, sqrt(2), (1+√5)/2, 2^3,
+// а для размеров фигуры — ещё и одну букву-масштаб: a, 2a, a/2, a√3.
+//
+// Буква означает положительную длину. Внутри разбора значение — одночлен c·aᵈ
+// (c — точное число, d — целая степень), поэтому складывать можно только
+// слагаемые одной степени: «a + 1» не пропорционально a и размером быть не может.
 
-export function parseNum(src) {
+function parseExpr(src) {
   const s = String(src).replace(/\s+/g, '').replace(/sqrt/gi, '√').replace(/[−–]/g, '-').replace(/[×·]/g, '*').replace(/:/g, '/');
   if (!s) throw new Error('Пустое значение');
-  let i = 0;
+  let i = 0, sym = null;
   const peek = () => s[i];
   const fail = () => { throw new Error(`Не удалось разобрать «${src}»`); };
+  const isLetter = (c) => c !== undefined && /[a-zA-Z]/.test(c);
+  const M = (v, d = 0) => ({ v, d });
 
   function expr() {
-    let v = term();
+    let x = term();
     while (peek() === '+' || peek() === '-') {
       const op = s[i++];
-      const t = term();
-      v = op === '+' ? v.add(t) : v.sub(t);
+      const y = term();
+      if (x.d !== y.d && !x.v.isZero() && !y.v.isZero()) {
+        throw new Error(`в «${src}» складываются величины разной размерности (например, буква и число без буквы) — размер должен быть пропорционален ${sym}: 2${sym}, ${sym}/2, ${sym}√3`);
+      }
+      x = M(op === '+' ? x.v.add(y.v) : x.v.sub(y.v), x.v.isZero() ? y.d : x.d);
     }
-    return v;
+    return x;
   }
   function term() {
-    let v = unary();
+    let x = unary();
     for (;;) {
       const c = peek();
-      if (c === '*') { i++; v = v.mul(unary()); }
-      else if (c === '/') { i++; const d = unary(); if (d.isZero()) throw new Error('Деление на ноль'); v = v.div(d); }
-      else if (c === '√' || c === '(') v = v.mul(unary());
-      else return v;
+      if (c === '*') { i++; const y = unary(); x = M(x.v.mul(y.v), x.d + y.d); }
+      else if (c === '/') { i++; const y = unary(); if (y.v.isZero()) throw new Error('Деление на ноль'); x = M(x.v.div(y.v), x.d - y.d); }
+      else if (c === '√' || c === '(' || isLetter(c)) { const y = unary(); x = M(x.v.mul(y.v), x.d + y.d); }
+      else return x;
     }
   }
   function unary() {
-    if (peek() === '-') { i++; return unary().neg(); }
+    if (peek() === '-') { i++; const x = unary(); return M(x.v.neg(), x.d); }
     if (peek() === '+') { i++; return unary(); }
-    let v = atom();
+    let x = atom();
     if (peek() === '^') {
       i++;
       const m = /^\d+/.exec(s.slice(i));
       if (!m || +m[0] > 64) fail();
       i += m[0].length;
       let r = ONE;
-      for (let k = 0; k < +m[0]; k++) r = r.mul(v);
-      v = r;
+      for (let k = 0; k < +m[0]; k++) r = r.mul(x.v);
+      x = M(r, x.d * +m[0]);
     }
-    return v;
+    return x;
   }
   function atom() {
     const c = peek();
-    if (c === '(') { i++; const v = expr(); if (s[i++] !== ')') fail(); return v; }
+    if (c === '(') { i++; const x = expr(); if (s[i++] !== ')') fail(); return x; }
     if (c === '√') {
       i++;
-      const v = atom();
-      if (v.sign() < 0) throw new Error('Корень из отрицательного числа');
-      const r = sqrtNum(v);
+      const x = atom();
+      if (x.v.sign() < 0) throw new Error('Корень из отрицательного числа');
+      if (x.d % 2) throw new Error(`корень из буквы ${sym} не поддерживается — размер должен быть пропорционален самой букве`);
+      const r = sqrtNum(x.v);
       if (!r) throw new Error(`Корень в «${src}» не упрощается — такой размер не поддерживается`);
-      return r;
+      return M(r, x.d / 2); // √(a²) = a, потому что a > 0
     }
+    if (isLetter(c)) {
+      if (sym && sym !== c) throw new Error(`в размере встречаются две буквы, ${sym} и ${c}. Поддерживается одна буква-масштаб: все размеры должны быть пропорциональны ей (${sym}, 2${sym}, ${sym}√3)`);
+      sym = c; i++;
+      return M(ONE, 1);
+    }
+    if (c !== undefined && /\p{L}/u.test(c)) throw new Error(`«${c}» — не латинская буква; размер обозначается латинской буквой (a, b, h…)`);
     const m = /^(\d+)(?:[.,](\d+))?/.exec(s.slice(i));
     if (!m) fail();
     i += m[0].length;
     const frac = m[2] || '';
-    return Num.frac(BigInt(m[1] + frac), 10n ** BigInt(frac.length));
+    return M(Num.frac(BigInt(m[1] + frac), 10n ** BigInt(frac.length)));
   }
 
-  const v = expr();
+  const x = expr();
   if (i !== s.length) fail();
-  return v;
+  return { v: x.v, deg: x.v.isZero() ? 0 : x.d, sym };
+}
+
+/** Число без букв */
+export function parseNum(src) {
+  const x = parseExpr(src);
+  if (x.sym) throw new Error(`в «${src}» есть буква, а здесь нужно число`);
+  return x.v;
+}
+
+/**
+ * Размер фигуры: число (sym = null) или c·буква — тогда v = c, а sym — буква.
+ * @returns {{ v: Num, sym: string | null }}
+ */
+export function parseDim(src) {
+  const x = parseExpr(src);
+  if (x.deg === 0) return { v: x.v, sym: null };
+  if (x.deg !== 1) throw new Error(`«${src}» — не длина: буква ${x.sym} должна входить в первой степени (${x.sym}, 2${x.sym}, ${x.sym}/2, ${x.sym}√3)`);
+  return { v: x.v, sym: x.sym };
 }

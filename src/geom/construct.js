@@ -1,7 +1,7 @@
 // Построения на фигуре: точки, сечения, перпендикуляры, сферы, расстояния и углы.
 // Всё считается точно (см. math/num.js); числа с плавающей точкой используются
 // только для упорядочивания вершин сечения и для рисования.
-import { N, ZERO, ONE, parseNum, rootOf, sqrtNum, sumVals, fmtVal, fmtNum, fmtApprox, valToNumber, isPlain } from '../math/num.js';
+import { N, ZERO, ONE, parseNum, rootOf, sqrtNum, sumVals, fmtVal, fmtNum, fmtApprox, valToNumber, isPlain, unitStr } from '../math/num.js';
 import { add, sub, scale, dot, cross, det, len2, lerp, isZeroVec, eqVec, toFloat, solve, rank } from '../math/vec.js';
 import { polygonArea, facesVolume } from './solids.js';
 
@@ -46,7 +46,13 @@ export function withDependents(items, id) {
   return dead;
 }
 
-const row = (k, val, unit = '') => ({ k, v: fmtVal(val) + unit, a: isPlain(val) ? '' : fmtApprox(valToNumber(val)) });
+// deg — размерность: 1 — длина, 2 — площадь, 3 — объём, 0 — безразмерная величина.
+// Если размеры фигуры заданы буквой, значение — коэффициент при этой степени буквы.
+const row = (S, k, val, deg = 0) => {
+  const u = unitStr(S.unit, deg);
+  return { k, v: fmtVal(val, u), a: isPlain(val) ? '' : fmtApprox(valToNumber(val)) + (u ? '·' + u : '') };
+};
+const lenStr = (S, val) => fmtVal(val, unitStr(S.unit, 1));
 const text = (k, v) => ({ k, v, a: '' });
 
 export function evaluate(solid, items) {
@@ -261,8 +267,8 @@ const EVAL = {
     const sides = pts.map((p, i) => rootOf(len2(sub(pts[(i + 1) % pts.length], p))));
     const rows = [
       text('Форма', `${classifyPolygon(pts)} ${names.join('')}`),
-      row('Площадь', polygonArea(pts)),
-      row('Периметр', sumVals(sides)),
+      row(S, 'Площадь', polygonArea(pts), 2),
+      row(S, 'Периметр', sumVals(sides), 1),
     ];
     const notes = [];
 
@@ -272,10 +278,10 @@ const EVAL = {
     } else {
       const part = S.faces.map((face) => clip(face.map((i) => S.verts[i]), face.map((i) => f[i]))).filter((q) => q.length >= 3);
       const v1 = facesVolume(part, pl.pts[0].pos), v2 = S.volume.sub(v1);
-      rows.push(row(`V₁ (часть с вершиной ${S.names[pos]})`, v1), row(`V₂ (часть с вершиной ${S.names[neg]})`, v2));
+      rows.push(row(S, `V₁ (часть с вершиной ${S.names[pos]})`, v1, 3), row(S, `V₂ (часть с вершиной ${S.names[neg]})`, v2, 3));
       const r = v1.div(v2);
       const [p, q] = r.rational();
-      rows.push(r.isRational() ? text('V₁ : V₂', `${p} : ${q}`) : row('V₁ / V₂', r));
+      rows.push(r.isRational() ? text('V₁ : V₂', `${p} : ${q}`) : row(S, 'V₁ / V₂', r));
     }
     return {
       title, rows, notes,
@@ -300,7 +306,7 @@ const EVAL = {
     draw.marks = [{ at: H.pos, u: sub(P.pos, H.pos), v: sub(anchor.pos, H.pos) }];
     return {
       title, draw,
-      rows: [row(`Расстояние ${P.name}${H.name}`, rootOf(k.sq().div(nn))), text('Основание', `точка ${H.name}`)],
+      rows: [row(ctx.solid, `Расстояние ${P.name}${H.name}`, rootOf(k.sq().div(nn)), 1), text('Основание', `точка ${H.name}`)],
     };
   },
 
@@ -318,7 +324,7 @@ const EVAL = {
     draw.marks = [{ at: foot, u: sub(P.pos, foot), v: sub(other, foot) }];
     return {
       title, draw,
-      rows: [row(`Расстояние ${P.name}${H.name}`, rootOf(len2(sub(P.pos, foot)))), text('Основание', `точка ${H.name}`)],
+      rows: [row(ctx.solid, `Расстояние ${P.name}${H.name}`, rootOf(len2(sub(P.pos, foot))), 1), text('Основание', `точка ${H.name}`)],
       notes: outside(t) ? [`Основание ${H.name} лежит на продолжении отрезка ${l.name}.`] : [],
     };
   },
@@ -334,7 +340,7 @@ const EVAL = {
       const H = ctx.reg(it, 'H', foot, 'H');
       return {
         title,
-        rows: [row('Расстояние между прямыми', rootOf(len2(sub(l1.a.pos, foot))))],
+        rows: [row(ctx.solid, 'Расстояние между прямыми', rootOf(len2(sub(l1.a.pos, foot))), 1)],
         notes: [`Прямые ${l1.name} и ${l2.name} параллельны: общих перпендикуляров бесконечно много, показан один из них — ${l1.a.name}${H.name}.`],
         draw: {
           segs: [{ a: l1.a.pos, b: l1.b.pos, cls: 'aux' }, ...lineSegs(l2, t, foot), { a: l1.a.pos, b: foot, cls: 'main' }],
@@ -361,7 +367,7 @@ const EVAL = {
     if (outside(t)) notes.push(`Точка ${H2.name} лежит на продолжении отрезка ${l2.name}.`);
     return {
       title, notes,
-      rows: [row(`Расстояние ${H1.name}${H2.name}`, rootOf(k.sq().div(ww))), text('Общий перпендикуляр', `${H1.name}${H2.name}`)],
+      rows: [row(ctx.solid, `Расстояние ${H1.name}${H2.name}`, rootOf(k.sq().div(ww)), 1), text('Общий перпендикуляр', `${H1.name}${H2.name}`)],
       draw: { segs, marks: [{ at: p1, u: sub(p2, p1), v: l1.u }, { at: p2, u: sub(p1, p2), v: l2.u }] },
     };
   },
@@ -370,7 +376,7 @@ const EVAL = {
     const [a, b] = it.refs.map((r) => ctx.get(r));
     return {
       title: `Отрезок ${a.name}${b.name}`,
-      rows: [row('Длина', rootOf(len2(sub(b.pos, a.pos))))],
+      rows: [row(ctx.solid, 'Длина', rootOf(len2(sub(b.pos, a.pos))), 1)],
       draw: { segs: [{ a: a.pos, b: b.pos, cls: 'main' }] },
     };
   },
@@ -432,7 +438,7 @@ const EVAL = {
       const where = side.some((s) => s > 0) ? 'вне фигуры' : side.some((s) => s === 0) ? `на грани ${S.faceNames[side.indexOf(0)]}` : 'внутри фигуры';
       return {
         title,
-        rows: [row('Радиус R', rootOf(r2)), text('Центр', `точка ${O.name} (${where})`)],
+        rows: [row(S, 'Радиус R', rootOf(r2), 1), text('Центр', `точка ${O.name} (${where})`)],
         draw: { spheres: [{ c, r: Math.sqrt(r2.toNumber()) }] },
       };
     }
@@ -449,13 +455,13 @@ const EVAL = {
       return {
         title, absent: true,
         notes: [
-          `Описанной сферы не существует. Любая плоскость пересекает сферу по окружности, поэтому вершины каждой грани должны лежать на одной окружности. Для грани ${S.faceNames[fi]} это не так: окружность через ${S.names[f[0]]}, ${S.names[f[1]]}, ${S.names[f[2]]} имеет радиус ${fmtVal(rootOf(rr))}, а вершина ${S.names[off]} удалена от её центра на ${fmtVal(rootOf(len2(sub(cc, V[off]))))}.`,
+          `Описанной сферы не существует. Любая плоскость пересекает сферу по окружности, поэтому вершины каждой грани должны лежать на одной окружности. Для грани ${S.faceNames[fi]} это не так: окружность через ${S.names[f[0]]}, ${S.names[f[1]]}, ${S.names[f[2]]} имеет радиус ${lenStr(S, rootOf(rr))}, а вершина ${S.names[off]} удалена от её центра на ${lenStr(S, rootOf(len2(sub(cc, V[off]))))}.`,
         ],
       };
     }
     return {
       title, absent: true,
-      notes: [`Описанной сферы не существует: сфера через вершины ${pick.map((i) => S.names[i]).join(', ')} имеет радиус ${fmtVal(rootOf(r2))}, но вершина ${S.names[bad]} удалена от её центра на ${fmtVal(rootOf(len2(sub(c, V[bad]))))}. Точки, равноудалённой от всех вершин, нет.`],
+      notes: [`Описанной сферы не существует: сфера через вершины ${pick.map((i) => S.names[i]).join(', ')} имеет радиус ${lenStr(S, rootOf(r2))}, но вершина ${S.names[bad]} удалена от её центра на ${lenStr(S, rootOf(len2(sub(c, V[bad]))))}. Точки, равноудалённой от всех вершин, нет.`],
     };
   },
 
@@ -476,7 +482,7 @@ const EVAL = {
       const O = ctx.reg(it, 'O', c, 'O');
       return {
         title,
-        rows: [row('Радиус r', r), text('Центр', `точка ${O.name}`)],
+        rows: [row(S, 'Радиус r', r, 1), text('Центр', `точка ${O.name}`)],
         notes: ['Отмечены точки касания сферы с гранями.'],
         draw: { spheres: [{ c, r: r.toNumber() }], dots: rows.map((u) => add(c, scale(u.slice(0, 3), r))) },
       };
@@ -492,7 +498,7 @@ const EVAL = {
         const dj = rhs[j].sub(dot(rows[j].slice(0, 3), c));
         if (dj.eq(r)) continue;
         const names = sel.map((i) => S.faceNames[i]);
-        why = `сфера, касающаяся граней ${names.slice(0, 3).join(', ')} и ${names[3]}, имеет радиус ${fmtNum(r)}, а расстояние от её центра до грани ${S.faceNames[j]} равно ${fmtNum(dj.sign() < 0 ? dj.neg() : dj)}${dj.sign() < 0 ? ' (центр оказывается по внешнюю сторону этой грани)' : ''}. Точки, равноудалённой от всех граней, нет.`;
+        why = `сфера, касающаяся граней ${names.slice(0, 3).join(', ')} и ${names[3]}, имеет радиус ${lenStr(S, r)}, а расстояние от её центра до грани ${S.faceNames[j]} равно ${lenStr(S, dj.sign() < 0 ? dj.neg() : dj)}${dj.sign() < 0 ? ' (центр оказывается по внешнюю сторону этой грани)' : ''}. Точки, равноудалённой от всех граней, нет.`;
         break;
       }
     }

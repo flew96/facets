@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { N, parseNum, sqrtNum, fmtNum, fmtVal, rootOf, sumVals } from '../src/math/num.js';
-import { buildSolid, defaultSpec } from '../src/geom/solids.js';
+import { N, parseNum, parseDim, unitStr, sqrtNum, fmtNum, fmtVal, rootOf, sumVals } from '../src/math/num.js';
+import { buildSolid, defaultSpec, specUnit } from '../src/geom/solids.js';
 import { evaluate } from '../src/geom/construct.js';
 
 const P = parseNum;
@@ -265,4 +265,95 @@ test('решения методом координат', () => {
   assert.match(explain(items[1], ctx).join(' '), /√3\/3/);
   assert.match(explain(items[2], ctx).join(' '), /r = 1\/2/);
   assert.match(explain(items[3], ctx).join(' '), /sin φ/);
+});
+
+// ───────────────────────── буквенные размеры ─────────────────────────
+
+test('буквенные размеры: разбор и запись', () => {
+  const dim = (s) => { const d = parseDim(s); return fmtNum(d.v, unitStr(d.sym, 1)); };
+  assert.equal(dim('a'), 'a');
+  assert.equal(dim('2a'), '2a');
+  assert.equal(dim('a/2'), 'a/2');
+  assert.equal(dim('a√3'), 'a√3');
+  assert.equal(dim('√3a/2'), 'a√3/2');
+  assert.equal(dim('1,5 a'), '3a/2');
+  assert.equal(dim('(a + 2a)/3'), 'a');
+  assert.equal(dim('√(a^2)'), 'a');
+  assert.equal(dim('3/2'), '3/2');
+  assert.equal(parseDim('5').sym, null);
+  assert.equal(fmtNum(P('(1+√2)/2'), 'a²'), 'a²(1 + √2)/2');
+  assert.equal(fmtNum(P('-1/2'), 'a'), '−a/2');
+  assert.equal(fmtVal(rootOf(P('(5+√3)/4')), 'a'), 'a√(5 + √3)/2');
+  assert.equal(unitStr('a', 3), 'a³');
+  assert.equal(unitStr(null, 3), '');
+  // не пропорционально букве — не размер
+  assert.throws(() => parseDim('a+1'), /разной размерности/);
+  assert.throws(() => parseDim('√a'), /корень из буквы/);
+  assert.throws(() => parseDim('a^2'), /в первой степени/);
+  assert.throws(() => parseDim('1/a'), /в первой степени/);
+  assert.throws(() => parseDim('ab'), /две буквы/);
+  assert.throws(() => parseNum('2a'), /нужно число/);
+});
+
+test('буквенные размеры: куб с ребром a', () => {
+  const S = solid('cube', { a: 'a' });
+  assert.equal(S.unit, 'a');
+  assert.equal(fmtVal(S.volume, unitStr(S.unit, 3)), 'a³');
+  assert.equal(fmtVal(S.surface, unitStr(S.unit, 2)), '6a²');
+  const items = [
+    mid(S, 'k', 'K', 'A', 'B'), mid(S, 'l', 'L', 'B', 'C'), mid(S, 'm', 'M', 'C', 'C₁'),
+    { id: 's', kind: 'section', refs: ['k', 'l', 'm'] },
+    { id: 'p', kind: 'commonPerp', refs: [v(S, 'A'), v(S, 'B₁'), v(S, 'B'), v(S, 'C₁')] },
+    { id: 'g', kind: 'angleLL', refs: [v(S, 'A'), v(S, 'B₁'), v(S, 'B'), v(S, 'C₁')] },
+    { id: 'd', kind: 'dist', refs: [v(S, 'A'), v(S, 'C₁')] },
+  ];
+  const ctx = evaluate(S, items), get = (id) => ctx.results.get(id);
+  const sec = rows(get('s'));
+  assert.equal(sec['Площадь'], '3a²√3/4');
+  assert.equal(sec['Периметр'], '3a√2');
+  assert.equal(sec['V₁ : V₂'], '1 : 1');
+  assert.match(get('s').rows.find((x) => x.k === 'Площадь').a, /^1,299·a²$/);
+  assert.equal(get('p').rows[0].v, 'a√3/3');
+  assert.equal(rows(get('g'))['Угол φ'], '60°'); // угол от a не зависит
+  assert.equal(rows(get('d'))['Длина'], 'a√3');
+  const sol = explain(items[4], ctx).join(' ');
+  assert.match(sol, /a > 0/);
+  assert.match(sol, /B₁\(a; 0; a\)/);
+  assert.match(sol, /\|w\| = a²√3/);
+  assert.match(sol, /= a√3\/3/);
+});
+
+test('буквенные размеры: правильный тетраэдр с ребром a', () => {
+  const S = solid('tetra', { a: 'a' });
+  const r = run(S, [{ id: 'i', kind: 'sphereIn' }, { id: 'o', kind: 'sphereOut' }]);
+  assert.equal(rows(r('i'))['Радиус r'], 'a√6/12');
+  assert.equal(rows(r('o'))['Радиус R'], 'a√6/4');
+  assert.equal(fmtVal(S.volume, unitStr(S.unit, 3)), 'a³√2/12');
+});
+
+test('буквенные размеры согласованы с числовыми', () => {
+  // параллелепипед a × 2a × a√3 при a = 5 — то же, что 5 × 10 × 5√3
+  const A = solid('box', { a: 'a', b: '2a', c: 'a√3' }), B = solid('box', { a: '5', b: '10', c: '5√3' });
+  assert.ok(A.volume.mul(N(125)).eq(B.volume));
+  const sec = (S) => rows(run(S, [{ id: 's', kind: 'section', refs: [v(S, 'A'), v(S, 'C'), v(S, 'B₁')] }])('s'));
+  const sa = sec(A), sb = sec(B);
+  assert.equal(sa['Площадь'], fmtVal(rootOf(P('19/4')), 'a²'));
+  assert.equal(sb['Площадь'], fmtVal(rootOf(P('19/4').mul(N(625)))));
+  assert.equal(sa['V₁ : V₂'], sb['V₁ : V₂']);
+});
+
+test('буквенные размеры: нельзя смешивать с числами и другими буквами', () => {
+  assert.throws(() => solid('box', { a: 'a', b: '3', c: '4' }), /Ребро BC: число без буквы нельзя смешивать/);
+  assert.throws(() => solid('box', { a: 'a', b: 'b', c: 'a' }), /две буквы, a и b/);
+  assert.throws(() => solid('pyramid', { a: 'a', h: 'a', k: 'a' }, { base: 'rect', kind: 'frustum' }), /число/);
+  assert.throws(() => solid('pyramid', { pts: '0 0; a 0; a a; 0 2', h: 'a' }, { base: 'poly' }), /Основание: число без буквы/);
+  assert.throws(() => solid('cube', { a: '-a' }), /положительным/);
+  // ноль совместим с буквой: 0 = 0·a
+  const S = solid('pyramid', { pts: '0 0; 2a 0; a a; 0 a', h: '3a', sx: '0', sy: 'a/2' }, { base: 'poly', apex: 'custom' });
+  assert.equal(S.unit, 'a');
+  assert.equal(S.baseCoords, 'A(0; 0), B(2a; 0), C(a; a), D(0; a)');
+  // усечённая пирамида: коэффициент подобия остаётся числом
+  assert.equal(fmtVal(solid('frustum', { a: '2a', t: 'a', h: 'a' }).volume, 'a³'), '7a³/3');
+  assert.equal(specUnit(S.spec), 'a');
+  assert.equal(specUnit(solid('cube').spec), null);
 });

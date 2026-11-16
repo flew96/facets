@@ -14,6 +14,14 @@ export const EXAMPLES = [
     },
   },
   {
+    title: 'Куб с ребром a: сечение, расстояние и угол в общем виде',
+    state: {
+      spec: spec('cube', {}, { a: 'a' }), seq: 10,
+      items: [ratio('i1', 'K', 0, 1), ratio('i2', 'L', 1, 2), ratio('i3', 'M', 2, 6), { id: 'i4', kind: 'section', color: 0, refs: ['i1', 'i2', 'i3'] },
+        { id: 'i5', kind: 'commonPerp', color: 1, refs: v(0, 5, 1, 6) }, { id: 'i6', kind: 'angleLL', color: 2, refs: v(0, 5, 1, 6) }],
+    },
+  },
+  {
     title: 'Пирамида: сечение методом следов (по шагам)',
     steps: 'i4',
     state: {

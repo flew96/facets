@@ -1,5 +1,5 @@
 // Фигуры: точные координаты вершин, грани (с внешней ориентацией), рёбра.
-import { N, ZERO, TWO, parseNum, rootOf, sqrtNum, sumVals, fmtNum } from '../math/num.js';
+import { N, ZERO, TWO, parseNum, parseDim, rootOf, sqrtNum, sumVals, fmtNum } from '../math/num.js';
 import { add, sub, scale, dot, cross, det, len2 } from '../math/vec.js';
 
 const SQ3 = parseNum('√3'), SQ6 = parseNum('√6');
@@ -17,6 +17,19 @@ export const BASES = {
 };
 
 const REGULAR = ['tri', 'sq', 'hex'];
+// Безразмерные параметры: буква в них недопустима
+export const SCALARS = ['k'];
+
+/** Буква-масштаб, если размеры фигуры заданы буквой, иначе null (ошибки разбора здесь не важны) */
+export function specUnit(spec) {
+  for (const [key, , mode] of KINDS[spec.kind].params(spec)) {
+    const raw = String(spec.p[key] ?? DEFAULT_PARAMS[key]);
+    for (const part of mode === 'pts' ? raw.split(/[;\s]+/).filter(Boolean) : [raw]) {
+      try { const d = parseDim(part); if (d.sym) return d.sym; } catch { /* нечитаемое значение */ }
+    }
+  }
+  return null;
+}
 // Третий элемент описания параметра: 'any' — число любого знака, 'pts' — список координат
 const apexParams = (s) => (s.apex === 'custom' ? [['sx', 'Проекция вершины: x', 'any'], ['sy', 'Проекция вершины: y', 'any']] : []);
 
@@ -50,11 +63,11 @@ export function defaultSpec(kind) {
 const LETTERS = 'ABCDEFGH';
 
 /** «0 0; 4 0; 5 3» → точные координаты вершин выпуклого многоугольника */
-function parsePolygon(src) {
+function parsePolygon(src, dims) {
   const pts = String(src).split(/[;\n]+/).map((t) => t.trim()).filter(Boolean).map((t, i) => {
     const xy = t.split(/\s+/);
     if (xy.length !== 2) throw new Error(`вершина ${LETTERS[i] || i + 1}: нужны две координаты через пробел, например «4 0»`);
-    return xy.map((v) => parseNum(v));
+    return xy.map((v) => { const d = parseDim(v); dims.push(d); return d.v; });
   });
   if (pts.length < 3) throw new Error('нужно не меньше трёх вершин');
   if (pts.length > LETTERS.length) throw new Error(`не больше ${LETTERS.length} вершин`);
@@ -121,12 +134,29 @@ export function buildSolid(spec) {
   const kind = KINDS[spec.kind];
   if (!kind) throw new Error('Неизвестная фигура');
   const p = {};
+  // Буквенные размеры: все длины фигуры пропорциональны одной букве (a, 2a, a√3), буква — положительная длина.
+  // Считаем с коэффициентами (как при a = 1): фигура при любом a > 0 подобна этой, поэтому длины
+  // умножаются на a, площади — на a², объёмы — на a³, а углы, отношения и все знаки не меняются.
+  const lengths = []; // { label, v, sym } для каждой длины
   for (const [key, label, mode] of kind.params(spec)) {
     const raw = spec.p[key] ?? DEFAULT_PARAMS[key];
+    const name = mode === 'pts' ? 'Основание' : label;
     let v;
-    try { v = mode === 'pts' ? parsePolygon(raw) : parseNum(raw); } catch (e) { throw new Error(`${mode === 'pts' ? 'Основание' : label}: ${e.message}`); }
+    try {
+      if (mode === 'pts') { const dims = []; v = parsePolygon(raw, dims); lengths.push(...dims.map((d) => ({ label: name, ...d }))); }
+      else if (SCALARS.includes(key)) v = parseNum(raw);
+      else { const d = parseDim(raw); v = d.v; lengths.push({ label, ...d }); }
+    } catch (e) { throw new Error(`${name}: ${e.message}`); }
     if (!mode && v.sign() <= 0) throw new Error(`${label}: размер должен быть положительным`);
     p[key] = v;
+  }
+  const unit = lengths.find((d) => d.sym)?.sym ?? null;
+  if (unit) {
+    const other = lengths.find((d) => d.sym && d.sym !== unit);
+    if (other) throw new Error(`${other.label}: в размерах встречаются две буквы, ${unit} и ${other.sym}. Поддерживается одна буква-масштаб: все размеры должны быть пропорциональны ей (${unit}, 2${unit}, ${unit}√3).`);
+    // ноль (координата или сдвиг) годится и с буквой: 0 = 0·a
+    const bare = lengths.find((d) => !d.sym && !d.v.isZero());
+    if (bare) throw new Error(`${bare.label}: число без буквы нельзя смешивать с буквенными размерами. Запишите этот размер через ${unit} (например, 2${unit} или ${unit}/2) либо задайте все размеры числами.`);
   }
   let baseInfo = null;
   // Куда проецируется вершина пирамиды (для усечённой — вершина полной пирамиды)
@@ -207,8 +237,10 @@ export function buildSolid(spec) {
   const facePts = faces.map((f) => f.map((i) => verts[i]));
   return {
     spec, names, verts, faces, edges, planes, centroid, params: p,
+    /** буква-масштаб или null; координаты, длины, площади и объёмы ниже — коэффициенты при её степенях */
+    unit,
     baseSize: baseInfo ? baseInfo.pts.length : 0,
-    baseCoords: baseInfo ? baseInfo.pts.map(([x, y], i) => `${LETTERS[i]}(${fmtNum(x)}; ${fmtNum(y)})`).join(', ') : '',
+    baseCoords: baseInfo ? baseInfo.pts.map(([x, y], i) => `${LETTERS[i]}(${fmtNum(x, unit || '')}; ${fmtNum(y, unit || '')})`).join(', ') : '',
     faceNames,
     volume: facesVolume(facePts, verts[0]),
     surface: sumVals(facePts.map(polygonArea)),

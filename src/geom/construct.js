@@ -20,7 +20,14 @@ export const TOOLS = {
   angleLL: { title: 'Угол между прямыми', slots: ['1-я прямая: первая точка', '1-я прямая: вторая точка', '2-я прямая: первая точка', '2-я прямая: вторая точка'] },
   angleLP: { title: 'Угол между прямой и плоскостью', slots: ['прямая: первая точка', 'прямая: вторая точка', '1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
   anglePP: { title: 'Угол между плоскостями', slots: ['1-я плоскость: точка 1', '1-я плоскость: точка 2', '1-я плоскость: точка 3', '2-я плоскость: точка 1', '2-я плоскость: точка 2', '2-я плоскость: точка 3'] },
+  secPar: { title: 'Сечение ∥ плоскости', slots: ['точка, через которую пройдёт сечение', '1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
+  secPerp: { title: 'Сечение ⟂ прямой', slots: ['точка, через которую пройдёт сечение', '1-я точка прямой', '2-я точка прямой'] },
 };
+
+// С какого слота начинается тройка точек плоскости: вместо трёх точек
+// можно одним кликом выбрать грань или уже построенное сечение.
+const PLANE_AT = { perpPlane: [1], angleLP: [2], anglePP: [0, 3], secPar: [1] };
+for (const [k, v] of Object.entries(PLANE_AT)) TOOLS[k].planeAt = v;
 
 const SUB = '₀₁₂₃₄₅₆₇₈₉';
 const subscript = (k) => (k ? String(k).replace(/\d/g, (d) => SUB[d]) : '');
@@ -90,7 +97,8 @@ function planeOf(ctx, refs) {
     }
     throw new Error(`Точки ${a.name}, ${b.name} и ${c.name} лежат на одной прямой — через них проходит бесконечно много плоскостей.`);
   }
-  return { n, d: dot(n, a.pos), name: `(${a.name}${b.name}${c.name})`, pts: [a, b, c] };
+  const name = `(${a.name}${b.name}${c.name})`;
+  return { n, d: dot(n, a.pos), name, pts: [a, b, c], label: `Плоскость ${name}`, title: `Сечение ${name}` };
 }
 
 function lineOf(ctx, refs) {
@@ -201,13 +209,24 @@ const EVAL = {
     return { title: `Точка ${it.name}`, rows: [text('Положение', desc)], draw };
   },
 
-  section(it, ctx) {
+  section: (it, ctx) => sectionOf(it, ctx, planeOf(ctx, it.refs)),
+
+  secPar(it, ctx) {
+    const P = ctx.get(it.refs[0]), base = planeOf(ctx, it.refs.slice(1));
+    return sectionOf(it, ctx, { n: base.n, d: dot(base.n, P.pos), pts: [P], label: 'Плоскость сечения', title: `Сечение через ${P.name} ∥ ${base.name}` });
+  },
+
+  secPerp(it, ctx) {
+    const P = ctx.get(it.refs[0]), l = lineOf(ctx, it.refs.slice(1));
+    return sectionOf(it, ctx, { n: l.u, d: dot(l.u, P.pos), pts: [P], label: 'Плоскость сечения', title: `Сечение через ${P.name} ⟂ ${l.name}` });
+  },
+
+  sectionBody(it, ctx, pl) {
     const S = ctx.solid;
-    const pl = planeOf(ctx, it.refs);
     const f = S.verts.map((v) => dot(pl.n, v).sub(pl.d));
     const sg = f.map((x) => x.sign());
-    const title = `Сечение ${pl.name}`;
-    const ghost = { polys: [{ pts: pl.pts.map((p) => p.pos), cls: 'ghost' }] };
+    const title = pl.title;
+    const ghost = pl.pts.length >= 3 ? { polys: [{ pts: pl.pts.map((p) => p.pos), cls: 'ghost' }] } : {};
 
     let pts = [];
     const push = (p) => { if (!pts.some((q) => eqVec(q, p))) pts.push(p); };
@@ -217,10 +236,10 @@ const EVAL = {
     if (pts.length < 3) {
       const on = sg.map((s, i) => (s === 0 ? S.names[i] : null)).filter(Boolean);
       const error = pts.length === 0
-        ? `Плоскость ${pl.name} проходит мимо фигуры: все вершины лежат по одну сторону от неё, сечения нет.`
+        ? `${pl.label} проходит мимо фигуры: все вершины лежат по одну сторону от неё, сечения нет.`
         : pts.length === 1
-          ? `Плоскость ${pl.name} имеет с фигурой единственную общую точку — вершину ${on[0]}. Сечения нет.`
-          : `Плоскость ${pl.name} касается фигуры по ребру ${on.join('')}: сечение вырождается в отрезок.`;
+          ? `${pl.label} имеет с фигурой единственную общую точку — вершину ${on[0]}. Сечения нет.`
+          : `${pl.label} касается фигуры по ребру ${on.join('')}: сечение вырождается в отрезок.`;
       return { title, error, draw: ghost };
     }
 
@@ -264,7 +283,7 @@ const EVAL = {
         polys: [{ pts, cls: 'section' }],
         segs: pts.map((p, i) => ({ a: p, b: pts[(i + 1) % pts.length], cls: 'main' })),
       },
-      section: { pts, names, sides, n: pl.n },
+      section: { pts, names, sides, n: pl.n, d: pl.d, onFace: pos < 0 || neg < 0, given: pl.pts.map((p) => ({ name: p.name, pos: p.pos })) },
     };
   },
 
@@ -482,3 +501,5 @@ const EVAL = {
     return { title, absent: true, notes };
   },
 };
+
+function sectionOf(it, ctx, pl) { return EVAL.sectionBody(it, ctx, pl); }

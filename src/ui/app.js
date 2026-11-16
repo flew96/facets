@@ -2,48 +2,65 @@ import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain, parseNum } from '../ma
 import { toFloat } from '../math/vec.js';
 import { KINDS, BASES, DEFAULT_PARAMS, buildSolid, defaultSpec } from '../geom/solids.js';
 import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.js';
+import { buildTrace } from '../geom/trace.js';
+import { explain } from '../geom/explain.js';
 import { View, HOME } from './view.js';
+import { netSvg } from './net.js';
+import { EXAMPLES } from './examples.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const COLORS = ['#c2410c', '#1d4ed8', '#15803d', '#9333ea', '#be123c', '#0e7490'];
 const STORE = 'facets.v1';
 const SNAP = 12; // точки на рёбрах и гранях привязываются к двенадцатым долям
+const SECTIONS = ['section', 'secPar', 'secPerp'];
 
 const TOOL_GROUPS = [
   ['Точки', ['point', 'ratio', 'center']],
-  ['Сечение', ['section']],
+  ['Сечения', ['section', 'secPar', 'secPerp']],
   ['Перпендикуляры', ['perpPlane', 'perpLine', 'commonPerp']],
   ['Сферы', ['sphereIn', 'sphereOut']],
   ['Измерения', ['dist', 'angleLL', 'angleLP', 'anglePP']],
 ];
 
-function demoState() {
-  const pt = (id, name, a, b) => ({ id, kind: 'point', name, color: 0, def: { t: 'ratio', a: 'v' + a, b: 'v' + b, m: '1', n: '1' } });
-  return {
-    spec: { ...defaultSpec('cube') },
-    items: [pt('i1', 'K', 0, 1), pt('i2', 'L', 1, 2), pt('i3', 'M', 2, 6), { id: 'i4', kind: 'section', color: 0, refs: ['i1', 'i2', 'i3'] }],
-    seq: 5,
-    opts: { alpha: 0.1, hidden: true, labels: true },
-  };
-}
+const freshState = (ex) => ({ opts: { alpha: 0.1, hidden: true, labels: true }, ...structuredClone(ex.state) });
 
-let state = load() || demoState();
+let state = fromHash() || load() || freshState(EXAMPLES[0]);
 let solid = null, specError = null, ctx = null;
-const ui = { tool: null, picked: [], unfolded: new Set() };
+const ui = { tool: null, picked: [], unfolded: new Set(), solOpen: new Set(), steps: null };
 const history = [];
+const traces = new Map();
 const view = new View($('#view'));
 
-function load() {
-  try { const s = JSON.parse(localStorage.getItem(STORE)); return s && s.spec && Array.isArray(s.items) ? s : null; } catch { return null; }
-}
+function valid(s) { return s && s.spec && KINDS[s.spec.kind] && Array.isArray(s.items) ? { opts: { alpha: 0.1, hidden: true, labels: true }, seq: 1000, ...s } : null; }
+function load() { try { return valid(JSON.parse(localStorage.getItem(STORE))); } catch { return null; } }
 function save() { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* хранилище недоступно */ } }
 function commit() { history.push(JSON.stringify(state)); if (history.length > 100) history.shift(); }
+function resetUi() { ui.tool = null; ui.picked = []; ui.steps = null; ui.unfolded.clear(); ui.solOpen.clear(); view.preview = null; }
 function undo() {
   if (!history.length) return;
   state = JSON.parse(history.pop());
-  ui.tool = null; ui.picked = [];
+  resetUi();
   refresh(true);
+}
+function replaceState(next) { commit(); state = next; resetUi(); syncViewControls(); refresh(true); }
+
+// Ссылка на задачу: всё состояние упаковано в адрес после #
+function encodeState() {
+  const bytes = new TextEncoder().encode(JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq }));
+  let bin = '';
+  bytes.forEach((b) => { bin += String.fromCharCode(b); });
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function fromHash() {
+  const m = /^#s=([\w-]+)$/.exec(location.hash);
+  if (!m) return null;
+  try {
+    const bin = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const s = valid(JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))));
+    window.history.replaceState(null, '', location.pathname);
+    return s;
+  } catch { return null; }
 }
 
 // ───────────────────────────── пересчёт и сцена ─────────────────────────────
@@ -51,6 +68,8 @@ function undo() {
 function refresh(figureChanged = false) {
   try { solid = buildSolid(state.spec); specError = null; } catch (e) { specError = e.message; if (!solid) solid = buildSolid(defaultSpec('cube')); }
   ctx = evaluate(solid, state.items);
+  traces.clear();
+  if (ui.steps && !traceOf(ui.steps.id)) ui.steps = null;
   view.opts = state.opts;
   view.setScene(buildScene());
   if (figureChanged) renderFigure();
@@ -61,6 +80,60 @@ function refresh(figureChanged = false) {
   save();
 }
 
+/** Шаги построения сечения методом следов (или null, если они неприменимы) */
+function traceOf(id) {
+  if (traces.has(id)) return traces.get(id);
+  const it = state.items.find((x) => x.id === id), sec = ctx.results.get(id)?.section;
+  let tr = null;
+  if (it && it.kind === 'section' && sec && !sec.onFace) { try { tr = buildTrace(solid, sec, ctx.used); } catch { tr = null; } }
+  traces.set(id, tr);
+  return tr;
+}
+
+const dotF = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/** Часть фигуры по одну сторону от плоскости g(p) = keep·(n·p − d) ≥ 0 — тоже выпуклый многогранник */
+function cutSolid(verts, faces, planes, n, d, keep) {
+  const g = (p) => keep * (dotF(n, p) - d);
+  const eps = 1e-9 * Math.max(...verts.map((v) => Math.hypot(...v)));
+  const outV = [], index = new Map();
+  const id = (p) => {
+    const key = p.map((x) => x.toFixed(7)).join(',');
+    if (!index.has(key)) { index.set(key, outV.length); outV.push(p); }
+    return index.get(key);
+  };
+  const outF = [], outP = [], cap = new Set();
+  faces.forEach((f, fi) => {
+    const poly = [];
+    f.forEach((vi, i) => {
+      const a = verts[vi], b = verts[f[(i + 1) % f.length]], ga = g(a), gb = g(b);
+      if (ga >= -eps) poly.push(a);
+      if ((ga > eps && gb < -eps) || (ga < -eps && gb > eps)) poly.push(a.map((x, k) => x + ((b[k] - x) * ga) / (ga - gb)));
+    });
+    const ids = [...new Set(poly.map(id))];
+    if (ids.length < 3) return;
+    outF.push(ids); outP.push(planes[fi]);
+    for (const p of poly) if (Math.abs(g(p)) <= eps * 10) cap.add(id(p));
+  });
+  if (cap.size >= 3) {
+    const ids = [...cap], c = [0, 1, 2].map((k) => ids.reduce((s, i) => s + outV[i][k], 0) / ids.length);
+    const e1 = outV[ids[0]].map((x, k) => x - c[k]);
+    const e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]];
+    ids.sort((i, j) => {
+      const a = outV[i].map((x, k) => x - c[k]), b = outV[j].map((x, k) => x - c[k]);
+      return Math.atan2(dotF(a, e2), dotF(a, e1) * Math.hypot(...n)) - Math.atan2(dotF(b, e2), dotF(b, e1) * Math.hypot(...n));
+    });
+    const l = Math.hypot(...n), u = n.map((x) => (-keep * x) / l);
+    outF.push(ids); outP.push({ n: u, d: dotF(u, outV[ids[0]]) });
+  }
+  const seen = new Set(), edges = [];
+  for (const f of outF) f.forEach((a, i) => {
+    const b = f[(i + 1) % f.length], key = a < b ? `${a}-${b}` : `${b}-${a}`;
+    if (!seen.has(key)) { seen.add(key); edges.push([a, b]); }
+  });
+  return { verts: outV, faces: outF, planes: outP, edges, inside: (p) => g(p) >= -eps * 10 };
+}
+
 function buildScene() {
   const c = toFloat(solid.centroid);
   const F = (pos) => { const p = toFloat(pos); return [p[0] - c[0], p[1] - c[1], p[2] - c[2]]; };
@@ -68,28 +141,52 @@ function buildScene() {
   const verts = solid.verts.map(F);
   const planes = solid.planes.map((pl, i) => {
     const n = toFloat(pl.n), l = Math.hypot(...n), u = n.map((x) => x / l);
-    const v = verts[solid.faces[i][0]];
-    return { n: u, d: u[0] * v[0] + u[1] * v[1] + u[2] * v[2] };
+    return { n: u, d: dotF(u, verts[solid.faces[i][0]]) };
   });
   const colorOf = (id) => COLORS[(state.items.find((it) => it.id === id)?.color ?? 0) % COLORS.length];
   const layers = [];
+  let hiddenNames = null;
   for (const it of state.items) {
-    const dr = ctx.results.get(it.id).draw;
+    const res = ctx.results.get(it.id), dr = res.draw;
     if (it.hide || !dr) continue;
-    layers.push({
-      color: colorOf(it.id),
-      segs: (dr.segs || []).map((s) => ({ a: F(s.a), b: F(s.b), cls: s.cls })),
-      polys: (dr.polys || []).map((p) => ({ pts: p.pts.map(F), cls: p.cls })),
-      marks: (dr.marks || []).map((m) => ({ at: F(m.at), u: D(m.u), v: D(m.v) })),
-      spheres: (dr.spheres || []).map((s) => ({ c: F(s.c), r: s.r })),
-      dots: (dr.dots || []).map(F),
-    });
+    const L = { id: it.id, color: colorOf(it.id) };
+    const tr = ui.steps?.id === it.id ? traceOf(it.id) : null;
+    if (tr) {
+      // показываем построение только до текущего шага
+      const upTo = tr.slice(0, ui.steps.k + 1), cur = upTo.at(-1);
+      L.segs = upTo.flatMap((s) => s.segs).map((s) => ({ a: F(s.a), b: F(s.b), cls: s.cls }));
+      L.labels = upTo.flatMap((s) => s.labels).map((l) => ({ name: l.name, p: F(l.pos) }));
+      L.polys = cur.final ? dr.polys.map((p) => ({ pts: p.pts.map(F), cls: p.cls })) : [];
+      if (cur.final) L.segs.push(...dr.segs.map((s) => ({ a: F(s.a), b: F(s.b), cls: s.cls })));
+      const found = new Set(cur.found);
+      hiddenNames = new Set(res.section.names.filter((nm) => !found.has(nm)));
+    } else {
+      L.segs = (dr.segs || []).map((s) => ({ a: F(s.a), b: F(s.b), cls: s.cls }));
+      L.polys = (dr.polys || []).map((p) => ({ pts: p.pts.map(F), cls: p.cls }));
+    }
+    L.marks = (dr.marks || []).map((m) => ({ at: F(m.at), u: D(m.u), v: D(m.v) }));
+    L.spheres = (dr.spheres || []).map((s) => ({ c: F(s.c), r: s.r }));
+    L.dots = (dr.dots || []).map(F);
+    layers.push(L);
   }
   const picked = new Set(ui.picked.map((r) => ctx.points.get(r)));
-  const points = [...new Set(ctx.points.values())].map((p) => ({
-    ref: p.ref, name: p.name, p: F(p.pos), role: p.role, sel: picked.has(p), color: p.item ? colorOf(p.item) : null,
-  }));
-  return { verts, faces: solid.faces, edges: solid.edges, planes, layers, points, radius: Math.max(...verts.map((v) => Math.hypot(...v))), F };
+  let points = [...new Set(ctx.points.values())]
+    .filter((p) => !(hiddenNames && p.role === 'derived' && hiddenNames.has(p.name)))
+    .map((p) => ({ ref: p.ref, name: p.name, p: F(p.pos), role: p.role, sel: picked.has(p), color: p.item ? colorOf(p.item) : null }));
+  const scene = { verts, faces: solid.faces, edges: solid.edges, planes, layers, points, names: solid.names, radius: Math.max(...verts.map((v) => Math.hypot(...v))) };
+
+  // Отсечение: вместо фигуры рисуем её часть по одну сторону от сечения
+  const cutIt = state.items.find((it) => it.cut && !it.hide && ctx.results.get(it.id).section && !ctx.results.get(it.id).section.onFace);
+  if (cutIt) {
+    const sec = ctx.results.get(cutIt.id).section, n = toFloat(sec.n);
+    const part = cutSolid(verts, solid.faces, planes, n, sec.d.toNumber() - dotF(n, c), cutIt.cut === 1 ? -1 : 1);
+    Object.assign(scene, {
+      verts: part.verts, faces: part.faces, edges: part.edges, planes: part.planes, locked: true,
+      ghostEdges: solid.edges.map(([i, j]) => [verts[i], verts[j]]),
+      points: points.filter((p) => part.inside(p.p)),
+    });
+  }
+  return scene;
 }
 
 // ────────────────────────────── создание объектов ──────────────────────────────
@@ -124,8 +221,7 @@ function snapPick(pk) {
   const f = S.faces[pk.f], o = S.verts[f[0]];
   const e1 = S.verts[f[1]].map((x, q) => x - o[q]), e2 = S.verts[f[f.length - 1]].map((x, q) => x - o[q]);
   const w = pk.p.map((x, q) => x - o[q]);
-  const dt = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  const a11 = dt(e1, e1), a12 = dt(e1, e2), a22 = dt(e2, e2), b1 = dt(w, e1), b2 = dt(w, e2), det = a11 * a22 - a12 * a12;
+  const a11 = dotF(e1, e1), a12 = dotF(e1, e2), a22 = dotF(e2, e2), b1 = dotF(w, e1), b2 = dotF(w, e2), det = a11 * a22 - a12 * a12;
   const u = Math.round(((b1 * a22 - b2 * a12) / det) * SNAP), v = Math.round(((b2 * a11 - b1 * a12) / det) * SNAP);
   return {
     def: { t: 'face', f: pk.f, u: `${u}/${SNAP}`, v: `${v}/${SNAP}` },
@@ -145,10 +241,21 @@ function startTool(name) {
   refresh();
 }
 
+/** Режим клика для текущего шага инструмента */
+function pickMode(tool) {
+  if (tool.face) return 'face';
+  return tool.planeAt?.includes(ui.picked.length) ? 'plane' : 'pt';
+}
+
+/** Три точки, задающие плоскость грани или готового сечения */
+function planeRefs(pk) {
+  return pk.type === 'face' ? solid.faces[pk.f].slice(0, 3).map((i) => 'v' + i) : [0, 1, 2].map((k) => `${pk.id}:k${k}`);
+}
+
 view.onPick = (x, y) => {
   if (!ui.tool || specError) return;
-  const tool = TOOLS[ui.tool];
-  const pk = view.pick(x, y, tool.face ? 'face' : 'pt');
+  const tool = TOOLS[ui.tool], mode = pickMode(tool);
+  const pk = view.pick(x, y, mode);
   if (!pk) return;
   if (tool.face) {
     commit();
@@ -156,13 +263,17 @@ view.onPick = (x, y) => {
     ui.tool = null;
     return refresh();
   }
-  const sn = snapPick(pk);
-  if (!sn.ref) commit();
-  const ref = sn.ref || addPoint(sn.def);
+  let refs, created = false;
+  if (mode === 'plane' && (pk.type === 'face' || pk.type === 'section')) refs = planeRefs(pk);
+  else {
+    const sn = snapPick(pk);
+    if (!sn.ref) { commit(); created = true; }
+    refs = [sn.ref || addPoint(sn.def)];
+  }
   if (!tool.free) {
-    ui.picked.push(ref);
+    ui.picked.push(...refs);
     if (ui.picked.length === tool.slots.length) {
-      if (sn.ref) commit();
+      if (!created) commit();
       if (ui.tool === 'ratio') addPoint({ t: 'ratio', a: ui.picked[0], b: ui.picked[1], m: '1', n: '1' });
       else state.items.push({ id: newId(), kind: ui.tool, color: nextColor(), refs: ui.picked });
       ui.tool = null; ui.picked = [];
@@ -175,9 +286,11 @@ view.onPick = (x, y) => {
 view.onHover = (x, y) => {
   let pv = null;
   if (ui.tool && !specError) {
-    const tool = TOOLS[ui.tool];
-    const pk = view.pick(x, y, tool.face ? 'face' : 'pt');
+    const tool = TOOLS[ui.tool], mode = pickMode(tool);
+    const pk = view.pick(x, y, mode);
     if (pk && tool.face) pv = { p: pk.p, label: `грань ${solid.faceNames[pk.f]}` };
+    else if (pk && mode === 'plane' && pk.type === 'face') pv = { p: pk.p, label: `плоскость грани ${solid.faceNames[pk.f]}` };
+    else if (pk && pk.type === 'section') pv = { p: pk.p, label: 'плоскость этого сечения' };
     else if (pk) pv = snapPick(pk);
   }
   if (pv || view.preview) { view.preview = pv; view.invalidate(); }
@@ -209,10 +322,10 @@ function renderFigure() {
     html += `<label class="field"><span>${who}</span><select data-spec="apex">${opt('center', centerName, s.apex)}${[...'ABCDEFGH'.slice(0, n)].map((c, i) => opt(String(i), `в вершину ${c}`, s.apex)).join('')}${opt('custom', 'в произвольную точку (x; y)', s.apex)}</select></label>`;
   }
   html += '<div class="params">' + k.params(s).map(([key, label, mode]) => {
-    const val = esc(s.p[key] ?? DEFAULT_PARAMS[key]);
+    const raw = s.p[key] ?? DEFAULT_PARAMS[key];
     return mode === 'pts'
-      ? `<label class="field wide"><span>${esc(label)}</span><textarea data-param="${key}" rows="3" spellcheck="false">${val}</textarea></label>`
-      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${val}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, s.p[key] ?? DEFAULT_PARAMS[key], label)}</label>`;
+      ? `<label class="field wide"><span>${esc(label)}</span><textarea data-param="${key}" rows="3" spellcheck="false">${esc(raw)}</textarea></label>`
+      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${esc(raw)}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, raw, label)}</label>`;
   }).join('') + '</div>';
   html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code>.</p>';
   $('#figure').innerHTML = html;
@@ -239,7 +352,13 @@ function renderHint() {
   if (!ui.tool) { el.hidden = true; return; }
   const tool = TOOLS[ui.tool];
   const chips = ui.picked.map((r) => `<span class="chip">${esc(ctx.points.get(r)?.name ?? '?')}</span>`).join('');
-  const what = tool.slots ? `Выберите: <b>${tool.slots[ui.picked.length]}</b> <span class="fine">(${ui.picked.length + 1} из ${tool.slots.length}) — вершина, точка на ребре или на грани</span>` : esc(tool.hint);
+  let what = esc(tool.hint || '');
+  if (tool.slots) {
+    const plane = pickMode(tool) === 'plane';
+    const how = view.scene?.locked ? 'существующая точка (пока часть фигуры отсечена, новые точки не ставятся)'
+      : plane ? 'три точки по очереди — или один клик по грани либо по готовому сечению' : 'вершина, точка на ребре или на грани';
+    what = `Выберите: <b>${plane ? 'плоскость' : tool.slots[ui.picked.length]}</b> <span class="fine">(${ui.picked.length + 1} из ${tool.slots.length}) — ${how}</span>`;
+  }
   el.hidden = false;
   el.innerHTML = `<strong>${esc(tool.title)}.</strong> ${what} ${chips}<button data-act="cancel">Готово · Esc</button>`;
 }
@@ -252,7 +371,7 @@ function unfoldSvg(sec) {
   const nl = Math.hypot(...n), un = n.map((x) => x / nl);
   const d0 = P[1].map((x, i) => x - P[0][i]), l0 = Math.hypot(...d0), e1 = d0.map((x) => x / l0);
   const e2 = [un[1] * e1[2] - un[2] * e1[1], un[2] * e1[0] - un[0] * e1[2], un[0] * e1[1] - un[1] * e1[0]];
-  let q = P.map((p) => { const w = p.map((x, i) => x - P[0][i]); return [w[0] * e1[0] + w[1] * e1[1] + w[2] * e1[2], w[0] * e2[0] + w[1] * e2[1] + w[2] * e2[2]]; });
+  let q = P.map((p) => { const w = p.map((x, i) => x - P[0][i]); return [dotF(w, e1), dotF(w, e2)]; });
   const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
   const W = 300, H = 210, pad = 44;
@@ -270,34 +389,97 @@ function unfoldSvg(sec) {
   return `<figure class="unfold"><svg viewBox="0 0 ${W} ${H}">${s}</svg><figcaption>Сечение в натуральную величину; подписаны длины сторон</figcaption></figure>`;
 }
 
+const CUT_LABEL = ['Отсечь часть фигуры', 'Отсечь другую часть', 'Вернуть целую фигуру'];
+
+function sectionExtras(it, r) {
+  let body = '<div class="actions">';
+  const tr = traceOf(it.id), stepping = ui.steps?.id === it.id;
+  if (tr) body += `<button data-act="steps"${stepping ? ' class="on"' : ''}>${stepping ? 'Закрыть построение' : 'Построить по шагам'}</button>`;
+  body += `<button data-act="unfold">${ui.unfolded.has(it.id) ? 'Свернуть' : 'Натуральная величина'}</button><button data-act="look">Смотреть перпендикулярно</button>`;
+  if (!r.section.onFace) body += `<button data-act="cut"${it.cut ? ' class="on"' : ''}>${CUT_LABEL[it.cut || 0]}</button>`;
+  body += '</div>';
+  if (stepping) {
+    const k = ui.steps.k;
+    body = `<div class="steps"><div class="stepbar"><button data-act="prev"${k === 0 ? ' disabled' : ''} aria-label="Предыдущий шаг">◀</button><span>Шаг ${k + 1} из ${tr.length}</span><button data-act="next"${k === tr.length - 1 ? ' disabled' : ''} aria-label="Следующий шаг">▶</button></div><p>${esc(tr[k].text)}</p></div>` + body;
+  }
+  if (ui.unfolded.has(it.id)) body += unfoldSvg(r.section);
+  return body;
+}
+
 function renderResults() {
   const el = $('#results');
   if (!state.items.length) {
-    el.innerHTML = '<p class="empty">Построений пока нет. Выберите инструмент слева и кликайте по вершинам, рёбрам и граням фигуры — точки на рёбрах привязываются к «хорошим» отношениям (½, ⅓, ¼…).</p>';
+    el.innerHTML = '<p class="empty">Построений пока нет. Выберите инструмент слева и кликайте по вершинам, рёбрам и граням фигуры — точки на рёбрах привязываются к «хорошим» отношениям (½, ⅓, ¼…). Или откройте готовый пример из списка выше.</p>';
     return;
   }
   el.innerHTML = state.items.map((it) => {
     const r = ctx.results.get(it.id);
-    const title = r.title || TOOLS[it.kind]?.title || 'Точка';
+    const isPoint = it.kind === 'point';
     let body = '';
-    if (it.kind === 'point' && it.def.t === 'ratio') {
+    if (isPoint && it.def.t === 'ratio') {
       const a = ctx.points.get(it.def.a)?.name ?? '?', b = ctx.points.get(it.def.b)?.name ?? '?';
       body += `<div class="ratio">${esc(a + it.name)} : ${esc(it.name + b)} = <input data-ratio="m" value="${esc(it.def.m)}" aria-label="первая часть отношения"> : <input data-ratio="n" value="${esc(it.def.n)}" aria-label="вторая часть отношения"></div>`;
     }
     if (r.error) body += `<p class="err">${esc(r.error)}</p>`;
     if (r.absent) body += '<p class="badge">не существует</p>';
-    const rows = it.kind === 'point' && it.def.t === 'ratio' ? [] : r.rows;
+    if (r.section) body += sectionExtras(it, r);
+    const rows = isPoint && it.def.t === 'ratio' ? [] : r.rows;
     if (rows.length) body += '<dl>' + rows.map((x) => `<dt>${esc(x.k)}</dt><dd><b>${esc(x.v)}</b>${x.a ? ` <span class="approx">≈ ${x.a}</span>` : ''}</dd>`).join('') + '</dl>';
     body += r.notes.map((n) => `<p class="note">${esc(n)}</p>`).join('');
-    if (r.section) {
-      body += `<div class="actions"><button data-act="unfold">${ui.unfolded.has(it.id) ? 'Свернуть' : 'Развернуть на плоскость'}</button><button data-act="look">Смотреть перпендикулярно</button></div>`;
-      if (ui.unfolded.has(it.id)) body += unfoldSvg(r.section);
-    }
-    return `<article class="card${it.hide ? ' dim' : ''}${it.kind === 'point' ? ' small' : ''}" data-id="${it.id}" style="--c:${COLORS[it.color % COLORS.length]}">
-      <header><i class="sw"></i><h3>${esc(title)}</h3>
-      ${it.kind === 'point' ? '' : `<button data-act="hide" title="${it.hide ? 'Показать' : 'Скрыть'} на чертеже">${it.hide ? '○' : '●'}</button>`}
+    const sol = isPoint ? null : explain(it, ctx);
+    if (sol) body += `<details class="sol"${ui.solOpen.has(it.id) ? ' open' : ''}><summary>Решение методом координат</summary><ol>${sol.map((l) => `<li>${esc(l)}</li>`).join('')}</ol></details>`;
+    const title = isPoint
+      ? `<h3>Точка <input class="rename" data-rename value="${esc(it.name)}" maxlength="4" aria-label="Имя точки" title="Имя можно изменить"></h3>`
+      : `<h3>${esc(r.title || TOOLS[it.kind].title)}</h3>`;
+    return `<article class="card${it.hide ? ' dim' : ''}${isPoint ? ' small' : ''}" data-id="${it.id}" style="--c:${COLORS[it.color % COLORS.length]}">
+      <header>${title}
+      ${isPoint ? '' : `<button data-act="hide" title="${it.hide ? 'Показать' : 'Скрыть'} на чертеже">${it.hide ? '○' : '●'}</button>`}
       <button data-act="del" title="Удалить">✕</button></header>${body}</article>`;
   }).join('');
+}
+
+// ──────────────────────────── развёртка и файлы ────────────────────────────
+
+function showNet() {
+  const whole = { verts: solid.verts.map(toFloat), faces: solid.faces, names: solid.names };
+  whole.planes = solid.planes.map((pl, i) => { const n = toFloat(pl.n), l = Math.hypot(...n), u = n.map((x) => x / l); return { n: u, d: dotF(u, whole.verts[solid.faces[i][0]]) }; });
+  const sections = state.items.filter((it) => SECTIONS.includes(it.kind) && !it.hide && ctx.results.get(it.id).section)
+    .map((it) => ({ color: COLORS[it.color % COLORS.length], pts: ctx.results.get(it.id).section.pts.map(toFloat) }));
+  $('#net-body').innerHTML = netSvg(whole, sections)
+    + `<p class="fine">Все грани — в натуральную величину. ${sections.length ? 'Цветные линии — следы сечений на гранях.' : 'Постройте сечение, и его линия появится на развёртке.'}</p>`;
+  $('#net').showModal();
+}
+
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** Чертёж как самостоятельный SVG-файл: стили переносим из таблицы стилей в сами элементы */
+function exportSvg() {
+  const src = $('#view'), copy = src.cloneNode(true);
+  const props = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'font-family', 'font-size', 'font-style', 'font-weight', 'text-anchor', 'dominant-baseline', 'paint-order'];
+  const from = src.querySelectorAll('*'), to = copy.querySelectorAll('*');
+  from.forEach((el, i) => {
+    const cs = getComputedStyle(el);
+    to[i].setAttribute('style', props.map((p) => `${p}:${cs.getPropertyValue(p)}`).join(';'));
+    to[i].removeAttribute('class');
+  });
+  copy.querySelectorAll('.preview, .tip').forEach((el) => el.remove());
+  const box = src.viewBox.baseVal;
+  const bg = `<rect width="${box.width}" height="${box.height}" fill="${getComputedStyle(document.body).backgroundColor}"/>`;
+  const xml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${box.width} ${box.height}" width="${box.width}" height="${box.height}">${bg}${copy.innerHTML}</svg>`;
+  download('чертёж.svg', xml, 'image/svg+xml');
+}
+
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg; el.hidden = false;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { el.hidden = true; }, 2600);
 }
 
 // ──────────────────────────────── события ────────────────────────────────
@@ -326,7 +508,7 @@ $('#figure').addEventListener('change', (e) => {
     const key = t.dataset.spec;
     if (key === 'kind') state.spec = { ...defaultSpec(t.value), p: state.spec.p };
     else state.spec = { ...state.spec, [key]: t.value };
-    if (key === 'kind' || key === 'base') { state.items = []; ui.unfolded.clear(); }
+    if (key === 'kind' || key === 'base') { state.items = []; resetUi(); }
     if (key === 'base') state.spec.apex = 'center';
     ui.tool = null; ui.picked = [];
     refresh(true);
@@ -336,7 +518,7 @@ $('#figure').addEventListener('change', (e) => {
     // если у основания стало другое число вершин, старые построения к новой фигуре не относятся
     const before = solid.verts.length;
     refresh();
-    if (!specError && solid.verts.length !== before) { state.items = []; ui.unfolded.clear(); ui.tool = null; ui.picked = []; refresh(true); }
+    if (!specError && solid.verts.length !== before) { state.items = []; resetUi(); refresh(true); }
   }
 });
 
@@ -349,25 +531,54 @@ $('#results').addEventListener('click', (e) => {
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const id = b.closest('[data-id]').dataset.id, it = state.items.find((x) => x.id === id);
-  if (b.dataset.act === 'del') {
+  const act = b.dataset.act;
+  if (act === 'del') {
     commit();
     const dead = withDependents(state.items, id);
     state.items = state.items.filter((x) => !dead.has(x.id));
     ui.picked = [];
     refresh();
-  } else if (b.dataset.act === 'hide') { it.hide = !it.hide; refresh(); }
-  else if (b.dataset.act === 'unfold') { ui.unfolded.has(id) ? ui.unfolded.delete(id) : ui.unfolded.add(id); renderResults(); }
-  else if (b.dataset.act === 'look') view.lookAlong(toFloat(ctx.results.get(id).section.n));
+  } else if (act === 'hide') { it.hide = !it.hide; refresh(); }
+  else if (act === 'unfold') { ui.unfolded.has(id) ? ui.unfolded.delete(id) : ui.unfolded.add(id); renderResults(); }
+  else if (act === 'look') view.lookAlong(toFloat(ctx.results.get(id).section.n));
+  else if (act === 'steps') { ui.steps = ui.steps?.id === id ? null : { id, k: 0 }; refresh(); }
+  else if (act === 'prev' || act === 'next') {
+    const n = traceOf(id).length;
+    ui.steps.k = Math.max(0, Math.min(n - 1, ui.steps.k + (act === 'next' ? 1 : -1)));
+    refresh();
+    $(`[data-id="${id}"] [data-act="${ui.steps.k === n - 1 ? 'prev' : act}"]`)?.focus();
+  } else if (act === 'cut') {
+    const next = ((it.cut || 0) + 1) % 3;
+    for (const x of state.items) delete x.cut;
+    if (next) it.cut = next;
+    refresh();
+  }
 });
 
 $('#results').addEventListener('change', (e) => {
-  const key = e.target.dataset.ratio;
-  if (!key) return;
-  commit();
-  const it = state.items.find((x) => x.id === e.target.closest('[data-id]').dataset.id);
-  it.def = { ...it.def, [key]: e.target.value.trim() };
-  refresh();
+  const t = e.target, card = t.closest('[data-id]');
+  if (!card) return;
+  const it = state.items.find((x) => x.id === card.dataset.id);
+  if (t.dataset.ratio) {
+    commit();
+    it.def = { ...it.def, [t.dataset.ratio]: t.value.trim() };
+    refresh();
+  } else if ('rename' in t.dataset) {
+    const name = t.value.trim();
+    if (!name || name === it.name) { t.value = it.name; return; }
+    if (ctx.used.has(name)) { t.value = it.name; toast(`Имя «${name}» уже занято`); return; }
+    commit();
+    it.name = name;
+    refresh();
+  }
 });
+
+// <details> не всплывает, поэтому слушаем на фазе перехвата
+$('#results').addEventListener('toggle', (e) => {
+  const d = e.target, id = d.closest?.('[data-id]')?.dataset.id;
+  if (!id || !d.classList.contains('sol')) return;
+  d.open ? ui.solOpen.add(id) : ui.solOpen.delete(id);
+}, true);
 
 const alpha = $('#alpha'), hidden = $('#hidden'), labels = $('#labels');
 function syncViewControls() { alpha.value = state.opts.alpha; hidden.checked = state.opts.hidden; labels.checked = state.opts.labels; }
@@ -376,11 +587,45 @@ hidden.addEventListener('change', () => { state.opts.hidden = hidden.checked; vi
 labels.addEventListener('change', () => { state.opts.labels = labels.checked; view.invalidate(); save(); });
 $('#home').addEventListener('click', () => { view.zoom = 1; view.animateTo(HOME.yaw, HOME.pitch); });
 $('#undo').addEventListener('click', undo);
-$('#clear').addEventListener('click', () => { if (!state.items.length) return; commit(); state.items = []; ui.tool = null; ui.picked = []; ui.unfolded.clear(); refresh(); });
+$('#clear').addEventListener('click', () => { if (!state.items.length) return; commit(); state.items = []; resetUi(); refresh(); });
+$('#show-net').addEventListener('click', showNet);
+$('#net-close').addEventListener('click', () => $('#net').close());
+$('#export-svg').addEventListener('click', exportSvg);
+
+const exSel = $('#examples');
+exSel.innerHTML = '<option value="">Примеры задач…</option>' + EXAMPLES.map((ex, i) => `<option value="${i}">${esc(ex.title)}</option>`).join('');
+exSel.addEventListener('change', () => {
+  const ex = EXAMPLES[+exSel.value];
+  exSel.value = '';
+  if (!ex) return;
+  replaceState({ ...freshState(ex), opts: state.opts });
+  if (ex.steps) { ui.steps = { id: ex.steps, k: 0 }; refresh(); }
+});
+
+$('#save-file').addEventListener('click', () => download('задача.facets.json', JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq }, null, 2), 'application/json'));
+$('#open-file').addEventListener('click', () => $('#file').click());
+$('#file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let next = null;
+  try { next = valid(JSON.parse(await file.text())); } catch { /* не JSON */ }
+  if (!next) return toast('Не удалось прочитать файл: это не сохранённая задача');
+  replaceState({ ...next, opts: state.opts });
+});
+$('#copy-link').addEventListener('click', async () => {
+  const url = `${location.origin}${location.pathname}#s=${encodeState()}`;
+  try { await navigator.clipboard.writeText(url); toast('Ссылка на задачу скопирована'); } catch { window.prompt('Скопируйте ссылку на задачу:', url); }
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && ui.tool) cancelTool();
-  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !/INPUT|SELECT/.test(e.target.tagName)) { e.preventDefault(); undo(); }
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); undo(); }
+  if (ui.steps && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+    const n = traceOf(ui.steps.id).length;
+    ui.steps.k = Math.max(0, Math.min(n - 1, ui.steps.k + (e.key === 'ArrowRight' ? 1 : -1)));
+    refresh();
+  }
 });
 
 syncViewControls();

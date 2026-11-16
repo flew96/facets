@@ -199,3 +199,70 @@ test('некорректные произвольные основания', () 
   assert.throws(bad({ pts: '0 0; 1; 2 2' }), /две координаты/);
   assert.throws(bad({ a: '1', b: '2', c: '5' }, 'tri3'), /не существует/);
 });
+
+import { buildTrace } from '../src/geom/trace.js';
+import { explain } from '../src/geom/explain.js';
+
+test('сечения, параллельные плоскости и перпендикулярные прямой', () => {
+  const S = solid('cube', { a: '2' });
+  const get = run(S, [
+    mid(S, 'k', 'K', 'A', 'A₁'),
+    { id: 'p', kind: 'secPar', refs: ['k', v(S, 'A'), v(S, 'B'), v(S, 'C')] },
+    { id: 'q', kind: 'secPerp', refs: ['k', v(S, 'A'), v(S, 'C₁')] },
+  ]);
+  assert.match(rows(get('p'))['Форма'], /^квадрат/);
+  assert.equal(rows(get('p'))['Площадь'], '4');
+  assert.equal(rows(get('p'))['V₁ : V₂'], '1 : 1');
+  assert.ok(!get('q').error);
+});
+
+test('метод следов: пирамида, точки на трёх боковых рёбрах', () => {
+  const S = solid('pyramid', { a: '4', h: '6' }, { base: 'sq' });
+  const items = [mid(S, 'k', 'K', 'S', 'A', '1', '2'), mid(S, 'l', 'L', 'S', 'B'), mid(S, 'm', 'M', 'S', 'C', '2', '1'), { id: 's', kind: 'section', refs: ['k', 'l', 'm'] }];
+  const ctx = evaluate(S, items);
+  const sec = ctx.results.get('s').section;
+  const steps = buildTrace(S, sec, ctx.used);
+  assert.ok(steps && steps.length >= 4);
+  const text = steps.map((x) => x.text).join('\n');
+  assert.match(text, /продолжение ребра/);
+  assert.match(text, /искомое сечение/);
+  // каждая вершина сечения в итоге найдена
+  assert.deepEqual([...steps.at(-1).found].sort(), [...sec.names].sort());
+  for (const name of sec.names) assert.ok(steps.some((x) => x.found.includes(name)));
+});
+
+test('метод следов: куб, шестиугольник через параллельные грани', () => {
+  const S = solid('cube', { a: '2' });
+  const items = [mid(S, 'k', 'K', 'A', 'B'), mid(S, 'l', 'L', 'B', 'C'), mid(S, 'm', 'M', 'C', 'C₁'), { id: 's', kind: 'section', refs: ['k', 'l', 'm'] }];
+  const ctx = evaluate(S, items);
+  const steps = buildTrace(S, ctx.results.get('s').section, ctx.used);
+  const text = steps.map((x) => x.text).join('\n');
+  assert.match(text, /T₁/);
+  assert.doesNotMatch(text, /T₄/);
+  assert.equal(steps.filter((x) => /сторона сечения/.test(x.text)).length, 6);
+});
+
+test('метод следов: точки внутри граней (нет двух точек в одной грани)', () => {
+  const S = solid('cube', { a: '2' });
+  const fp = (id, name, f, u, w) => ({ id, kind: 'point', name, def: { t: 'face', f, u, v: w } });
+  const items = [fp('k', 'K', 2, '1/3', '1/4'), fp('l', 'L', 3, '1/2', '2/3'), fp('m', 'M', 1, '1/4', '1/2'), { id: 's', kind: 'section', refs: ['k', 'l', 'm'] }];
+  const ctx = evaluate(S, items);
+  const sec = ctx.results.get('s').section;
+  const steps = buildTrace(S, sec, ctx.used);
+  assert.ok(steps);
+  assert.deepEqual([...steps.at(-1).found].sort(), [...sec.names].sort());
+});
+
+test('решения методом координат', () => {
+  const S = solid('cube', { a: '1' });
+  const items = [
+    { id: 'a', kind: 'commonPerp', refs: [v(S, 'A'), v(S, 'B₁'), v(S, 'B'), v(S, 'C₁')] },
+    { id: 'b', kind: 'perpPlane', refs: [v(S, 'A'), v(S, 'B'), v(S, 'D'), v(S, 'A₁')] },
+    { id: 'c', kind: 'sphereIn' }, { id: 'd', kind: 'angleLP', refs: [v(S, 'A'), v(S, 'C₁'), v(S, 'A'), v(S, 'B'), v(S, 'C')] },
+  ];
+  const ctx = evaluate(S, items);
+  assert.match(explain(items[0], ctx).join(' '), /√3\/3/);
+  assert.match(explain(items[1], ctx).join(' '), /√3\/3/);
+  assert.match(explain(items[2], ctx).join(' '), /r = 1\/2/);
+  assert.match(explain(items[3], ctx).join(' '), /sin φ/);
+});

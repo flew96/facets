@@ -99,6 +99,11 @@ export class View {
       }
     };
     for (const [i, j] of S.edges) seg(S.verts[i], S.verts[j], 'edge', '');
+    // отсечённая часть фигуры — бледным контуром
+    for (const [a, b] of S.ghostEdges || []) {
+      const p = P(a), q = P(b);
+      back.push(`<line class="ghostedge" x1="${f1(p[0])}" y1="${f1(p[1])}" x2="${f1(q[0])}" y2="${f1(q[1])}"/>`);
+    }
 
     for (const L of S.layers) {
       const st = ` style="--c:${L.color}"`;
@@ -122,6 +127,11 @@ export class View {
         const order = (arr) => arr.sort((p, q) => dot(p, r) - dot(q, r));
         if (fr.length > 1) sph.push(`<polyline class="equator"${st} points="${pstr(order(fr))}"/>`);
         if (bk.length > 1 && o.hidden) sph.push(`<polyline class="equator hid"${st} points="${pstr(order(bk))}"/>`);
+      }
+      for (const lb of L.labels || []) {
+        const q = P(lb.p);
+        top.push(`<circle class="auxpt"${st} cx="${f1(q[0])}" cy="${f1(q[1])}" r="3.2"/>`);
+        top.push(`<text class="label derived"${st} x="${f1(q[0] + 11)}" y="${f1(q[1] - 12)}">${esc(lb.name)}</text>`);
       }
       for (const p of L.dots || []) { const q = P(p); top.push(`<circle class="touch"${st} cx="${f1(q[0])}" cy="${f1(q[1])}" r="2.6"/>`); }
     }
@@ -157,14 +167,14 @@ export class View {
     if (!S || !F) return null;
     const { cx, cy, sc, d, r, u } = F;
     const P = (p) => [cx + dot(p, r) * sc, cy - dot(p, u) * sc];
-    if (mode === 'pt') {
+    if (mode === 'pt' || mode === 'plane') {
       let best = null;
       for (const p of this._pts) {
         const dist = Math.hypot(p.x - x, p.y - y);
         if (dist < 13 && (!best || dist < best.dist)) best = { type: 'point', ref: p.ref, dist };
       }
       if (best) return best;
-      for (const [i, j] of S.edges) {
+      for (const [i, j] of S.locked ? [] : S.edges) {
         const a = P(S.verts[i]), b = P(S.verts[j]);
         const ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
         if (l2 < 1) continue;
@@ -176,6 +186,21 @@ export class View {
       }
       if (best) return best;
     }
+    if (mode === 'plane') {
+      // клик внутри уже построенного сечения выбирает его плоскость
+      for (const L of S.layers) {
+        for (const pg of L.polys || []) {
+          if (pg.cls !== 'section' || !L.id) continue;
+          const q2 = pg.pts.map(P);
+          let inside = false;
+          for (let i = 0, j = q2.length - 1; i < q2.length; j = i++) {
+            if ((q2[i][1] > y) !== (q2[j][1] > y) && x < ((q2[j][0] - q2[i][0]) * (y - q2[i][1])) / (q2[j][1] - q2[i][1]) + q2[i][0]) inside = !inside;
+          }
+          if (inside) return { type: 'section', id: L.id, p: [0, 1, 2].map((k) => pg.pts.reduce((s, v) => s + v[k], 0) / pg.pts.length) };
+        }
+      }
+    }
+    if (S.locked) return null;
     const q = [0, 1, 2].map((k) => (r[k] * (x - cx)) / sc + (u[k] * (cy - y)) / sc);
     for (let fi = 0; fi < S.faces.length; fi++) {
       const pl = S.planes[fi], nd = dot(pl.n, d);

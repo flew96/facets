@@ -13,6 +13,15 @@
       <p>конструктор по стереометрии</p>
     </header>
     <section>
+      <select id="examples" aria-label="Примеры задач"></select>
+      <div class="filebar">
+        <button id="save-file" title="Сохранить задачу в файл">Сохранить</button>
+        <button id="open-file" title="Открыть сохранённую задачу">Открыть</button>
+        <button id="copy-link" title="Скопировать ссылку на эту задачу">Ссылка</button>
+        <input id="file" type="file" accept=".json,application/json" hidden>
+      </div>
+    </section>
+    <section>
       <h2>Фигура</h2>
       <div id="figure"></div>
       <div id="figure-info"></div>
@@ -33,8 +42,11 @@
       <label><input id="hidden" type="checkbox"> невидимые линии</label>
       <label><input id="labels" type="checkbox"> подписи</label>
       <button id="home">Исходный вид</button>
+      <button id="show-net">Развёртка</button>
+      <button id="export-svg" title="Сохранить чертёж как картинку SVG">Картинка</button>
       <span class="fine">тяните — вращение, колесо — масштаб</span>
     </div>
+    <div id="toast" class="toast" role="status" hidden></div>
   </main>
 
   <aside class="side right">
@@ -45,6 +57,14 @@
     </header>
     <div id="results"></div>
   </aside>
+
+  <dialog id="net" aria-labelledby="net-title">
+    <header class="row">
+      <h2 id="net-title">Развёртка поверхности</h2>
+      <button id="net-close">Закрыть</button>
+    </header>
+    <div id="net-body"></div>
+  </dialog>
 
   <script type="module" src="src/ui/app.js"></script>
 </body>

@@ -1,0 +1,10 @@
+{
+  "name": "facets",
+  "private": true,
+  "type": "module",
+  "description": "Грани — конструктор по стереометрии с точными вычислениями",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/core.test.mjs"
+  }
+}

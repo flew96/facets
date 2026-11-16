@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Грани — конструктор по стереометрии</title>
+  <link rel="stylesheet" href="src/ui/style.css">
+</head>
+<body>
+  <aside class="side left">
+    <header class="brand">
+      <h1>Грани</h1>
+      <p>конструктор по стереометрии</p>
+    </header>
+    <section>
+      <h2>Фигура</h2>
+      <div id="figure"></div>
+      <div id="figure-info"></div>
+    </section>
+    <section>
+      <h2>Построения</h2>
+      <div id="tools"></div>
+    </section>
+  </aside>
+
+  <main class="stage">
+    <div id="hint" class="hint" hidden></div>
+    <svg id="view" role="img" aria-label="Чертёж фигуры"></svg>
+    <div class="viewbar">
+      <label title="Насколько плотно закрашены грани">Грани
+        <input id="alpha" type="range" min="0" max="0.9" step="0.02">
+      </label>
+      <label><input id="hidden" type="checkbox"> невидимые линии</label>
+      <label><input id="labels" type="checkbox"> подписи</label>
+      <button id="home">Исходный вид</button>
+      <span class="fine">тяните — вращение, колесо — масштаб</span>
+    </div>
+  </main>
+
+  <aside class="side right">
+    <header class="row">
+      <h2>Результаты</h2>
+      <button id="undo" title="Ctrl+Z">Отменить</button>
+      <button id="clear">Очистить</button>
+    </header>
+    <div id="results"></div>
+  </aside>
+
+  <script type="module" src="src/ui/app.js"></script>
+</body>
+</html>

@@ -43,7 +43,14 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; backgrou
 }
 .field input, .ratio input { font-family: var(--math); font-size: 16px; }
 .params { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 8px; }
-.field input, .field select { width: 100%; }
+.field input, .field select, .field textarea { width: 100%; }
+.field textarea {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; color: var(--ink);
+  font: 15px/1.4 var(--math); resize: vertical;
+}
+.field.wide { grid-column: 1 / -1; }
+.params .field.wide span { min-height: 0; }
+.coords { margin-top: 8px; font-family: var(--math); font-size: 14px; }
 .params .field span { min-height: 2.6em; display: flex; align-items: flex-end; }
 :is(input, select, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -138,7 +145,7 @@ dd b { font: 600 16px/1.3 var(--math); overflow-wrap: anywhere; }
 .unfold figcaption { font-size: 12px; color: var(--muted); margin-top: 3px; }
 
 @media (max-width: 980px) {
-  body { grid-template-columns: 1fr; grid-template-rows: auto 70vh auto; height: auto; }
-  .stage { order: -1; }
+  body { grid-template-columns: 1fr; grid-template-rows: none; height: auto; }
+  .stage { order: -1; height: 70vh; }
   .side { border: none; border-top: 1px solid var(--line); }
 }

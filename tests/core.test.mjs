@@ -165,3 +165,37 @@ test('плоскость проходит мимо фигуры', () => {
   ]);
   assert.match(get('s').error, /мимо фигуры/);
 });
+
+test('произвольные фигуры', () => {
+  // пирамида на треугольнике 3-4-5 (по трём сторонам), вершина над произвольной точкой
+  const py = buildSolid({ kind: 'pyramid', base: 'tri3', apex: 'custom', p: { a: '3', b: '4', c: '5', h: '6', sx: '10', sy: '-7' } });
+  assert.equal(fmtNum(py.volume), '12');
+  // наклонная призма: объём не зависит от сдвига
+  const pr = buildSolid({ kind: 'prism', base: 'sq', tilt: 'oblique', p: { a: '2', h: '3', dx: '1', dy: '5' } });
+  assert.equal(fmtNum(pr.volume), '12');
+  assert.ok(run(pr, [{ id: 's', kind: 'sphereIn' }])('s').absent);
+  // усечённая пирамида на прямоугольнике 4×2 по координатам, k = 1/2: V = h/3·(S₁ + S₂ + √(S₁S₂))
+  const fr = buildSolid({ kind: 'frustum', base: 'poly', apex: '0', p: { pts: '0 0; 4 0; 4 2; 0 2', k: '1/2', h: '3' } });
+  assert.equal(fmtNum(fr.volume), '14');
+  // обход по часовой стрелке тоже годится
+  const cw = buildSolid({ kind: 'pyramid', base: 'poly', apex: 'center', p: { pts: '0 0; 0 2; 4 2; 4 0', h: '3' } });
+  assert.equal(fmtNum(cw.volume), '8');
+  // трапеция с основаниями 6 и 2, высотой 3
+  const tr = buildSolid({ kind: 'prism', base: 'trap', p: { a: '6', b: '2', m: '3', h: '5' } });
+  assert.equal(fmtNum(tr.volume), '60');
+  assert.equal(run(tr, [{ id: 's', kind: 'sphereOut' }])('s').absent, undefined);
+  // произвольный тетраэдр: сечение и расстояния считаются как обычно
+  const get = run(py, [{ id: 'h', kind: 'perpPlane', refs: ['v3', 'v0', 'v1', 'v2'] }, { id: 'o', kind: 'sphereOut' }]);
+  assert.equal(get('h').rows[0].v, '6');
+  assert.ok(!get('o').error && !get('o').absent);
+});
+
+test('некорректные произвольные основания', () => {
+  const bad = (p, base = 'poly') => () => buildSolid({ kind: 'pyramid', base, apex: 'center', p: { h: '1', ...p } });
+  assert.throws(bad({ pts: '0 0; 4 0; 1 1; 0 4' }), /выпуклым/);
+  assert.throws(bad({ pts: '0 0; 2 2; 2 0; 0 2' }), /выпуклым/);
+  assert.throws(bad({ pts: '0 0; 1 0; 2 0' }), /на одной прямой/);
+  assert.throws(bad({ pts: '0 0; 1 0' }), /трёх вершин/);
+  assert.throws(bad({ pts: '0 0; 1; 2 2' }), /две координаты/);
+  assert.throws(bad({ a: '1', b: '2', c: '5' }, 'tri3'), /не существует/);
+});

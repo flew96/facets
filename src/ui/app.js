@@ -1,6 +1,6 @@
 import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain } from '../math/num.js';
 import { toFloat } from '../math/vec.js';
-import { KINDS, BASES, buildSolid, defaultSpec } from '../geom/solids.js';
+import { KINDS, BASES, DEFAULT_PARAMS, buildSolid, defaultSpec } from '../geom/solids.js';
 import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.js';
 import { View, HOME } from './view.js';
 
@@ -190,11 +190,19 @@ function renderFigure() {
   const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
   let html = `<label class="field"><span>Фигура</span><select data-spec="kind">${Object.entries(KINDS).map(([v, x]) => opt(v, x.title, s.kind)).join('')}</select></label>`;
   if (k.bases) html += `<label class="field"><span>Основание</span><select data-spec="base">${k.bases.map((b) => opt(b, BASES[b].title, s.base)).join('')}</select></label>`;
+  if (k.tilt) html += `<label class="field"><span>Боковые рёбра</span><select data-spec="tilt">${opt('right', 'перпендикулярны основанию (прямая)', s.tilt || 'right')}${opt('oblique', 'наклонные (наклонная призма)', s.tilt)}</select></label>`;
   if (k.apex) {
-    const n = { tri: 3, rtri: 3, hex: 6 }[s.base] || 4;
-    html += `<label class="field"><span>Вершина S проецируется</span><select data-spec="apex">${opt('center', s.base === 'rtri' ? 'в середину гипотенузы' : 'в центр основания', s.apex)}${[...'ABCDEF'.slice(0, n)].map((c, i) => opt(String(i), `в вершину ${c}`, s.apex)).join('')}</select></label>`;
+    const n = !specError && solid.spec === s ? solid.baseSize : { tri: 3, rtri: 3, tri3: 3, hex: 6 }[s.base] || 4;
+    const centerName = s.base === 'rtri' ? 'в середину гипотенузы' : ['tri3', 'trap', 'poly'].includes(s.base) ? 'в центроид вершин основания' : 'в центр основания';
+    const who = s.kind === 'frustum' ? 'Вершина полной пирамиды проецируется' : 'Вершина S проецируется';
+    html += `<label class="field"><span>${who}</span><select data-spec="apex">${opt('center', centerName, s.apex)}${[...'ABCDEFGH'.slice(0, n)].map((c, i) => opt(String(i), `в вершину ${c}`, s.apex)).join('')}${opt('custom', 'в произвольную точку (x; y)', s.apex)}</select></label>`;
   }
-  html += '<div class="params">' + k.params(s).map(([key, label]) => `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${esc(s.p[key])}" spellcheck="false" autocomplete="off"></label>`).join('') + '</div>';
+  html += '<div class="params">' + k.params(s).map(([key, label, mode]) => {
+    const val = esc(s.p[key] ?? DEFAULT_PARAMS[key]);
+    return mode === 'pts'
+      ? `<label class="field wide"><span>${esc(label)}</span><textarea data-param="${key}" rows="3" spellcheck="false">${val}</textarea></label>`
+      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${val}" spellcheck="false" autocomplete="off"></label>`;
+  }).join('') + '</div>';
   html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code>.</p>';
   $('#figure').innerHTML = html;
 }
@@ -206,7 +214,9 @@ function valHtml(v) {
 function renderFigureInfo() {
   $('#figure-info').innerHTML = specError
     ? `<p class="err">${esc(specError)}</p>`
-    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface)}</dd></dl>`;
+    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface)}</dd></dl>`
+      + (solid.baseCoords && (state.spec.apex === 'custom' || state.spec.tilt === 'oblique' || state.spec.base === 'poly')
+        ? `<p class="fine coords">Координаты основания: ${esc(solid.baseCoords)}</p>` : '');
 }
 
 function renderTools() {
@@ -288,14 +298,17 @@ $('#figure').addEventListener('change', (e) => {
     const key = t.dataset.spec;
     if (key === 'kind') state.spec = { ...defaultSpec(t.value), p: state.spec.p };
     else state.spec = { ...state.spec, [key]: t.value };
-    if (key !== 'apex') { state.items = []; ui.unfolded.clear(); }
+    if (key === 'kind' || key === 'base') { state.items = []; ui.unfolded.clear(); }
     if (key === 'base') state.spec.apex = 'center';
     ui.tool = null; ui.picked = [];
     refresh(true);
   } else if (t.dataset.param) {
     commit();
     state.spec = { ...state.spec, p: { ...state.spec.p, [t.dataset.param]: t.value.trim() } };
+    // если у основания стало другое число вершин, старые построения к новой фигуре не относятся
+    const before = solid.verts.length;
     refresh();
+    if (!specError && solid.verts.length !== before) { state.items = []; ui.unfolded.clear(); ui.tool = null; ui.picked = []; refresh(true); }
   }
 });
 

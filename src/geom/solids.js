@@ -1,5 +1,5 @@
 // Фигуры: точные координаты вершин, грани (с внешней ориентацией), рёбра.
-import { N, ZERO, TWO, parseNum, rootOf, sumVals } from '../math/num.js';
+import { N, ZERO, TWO, parseNum, rootOf, sqrtNum, sumVals, fmtNum } from '../math/num.js';
 import { add, sub, scale, dot, cross, det, len2 } from '../math/vec.js';
 
 const SQ3 = parseNum('√3'), SQ6 = parseNum('√6');
@@ -11,34 +11,83 @@ export const BASES = {
   rect: { title: 'прямоугольник', params: [['a', 'Сторона AB'], ['b', 'Сторона BC']] },
   rhomb: { title: 'ромб', params: [['d1', 'Диагональ AC'], ['d2', 'Диагональ BD']] },
   hex: { title: 'правильный шестиугольник', params: [['a', 'Сторона основания']] },
+  tri3: { title: 'произвольный треугольник (по трём сторонам)', params: [['a', 'Сторона AB'], ['b', 'Сторона BC'], ['c', 'Сторона AC']] },
+  trap: { title: 'равнобедренная трапеция', params: [['a', 'Основание AD'], ['b', 'Основание BC'], ['m', 'Высота трапеции']] },
+  poly: { title: 'произвольный многоугольник (по координатам)', params: [['pts', 'Вершины основания по порядку обхода: x y; x y; …', 'pts']] },
 };
+
+const REGULAR = ['tri', 'sq', 'hex'];
+// Третий элемент описания параметра: 'any' — число любого знака, 'pts' — список координат
+const apexParams = (s) => (s.apex === 'custom' ? [['sx', 'Проекция вершины: x', 'any'], ['sy', 'Проекция вершины: y', 'any']] : []);
 
 export const KINDS = {
   cube: { title: 'Куб', params: () => [['a', 'Ребро']] },
   box: { title: 'Прямоугольный параллелепипед', params: () => [['a', 'Ребро AB'], ['b', 'Ребро BC'], ['c', 'Ребро AA₁']] },
-  prism: { title: 'Прямая призма', bases: Object.keys(BASES), params: (s) => [...BASES[s.base].params, ['h', 'Высота']] },
-  pyramid: { title: 'Пирамида', bases: Object.keys(BASES), apex: true, params: (s) => [...BASES[s.base].params, ['h', 'Высота']] },
+  prism: {
+    title: 'Призма', bases: Object.keys(BASES), tilt: true,
+    params: (s) => [...BASES[s.base].params, ['h', 'Высота'], ...(s.tilt === 'oblique' ? [['dx', 'Сдвиг верхнего основания: x', 'any'], ['dy', 'Сдвиг верхнего основания: y', 'any']] : [])],
+  },
+  pyramid: { title: 'Пирамида', bases: Object.keys(BASES), apex: true, params: (s) => [...BASES[s.base].params, ['h', 'Высота'], ...apexParams(s)] },
   tetra: { title: 'Правильный тетраэдр', params: () => [['a', 'Ребро']] },
   frustum: {
-    title: 'Усечённая пирамида', bases: ['tri', 'sq', 'hex'],
-    params: () => [['a', 'Сторона нижнего основания'], ['t', 'Сторона верхнего основания'], ['h', 'Высота']],
+    title: 'Усечённая пирамида', bases: Object.keys(BASES), apex: true,
+    params: (s) => [
+      ...(REGULAR.includes(s.base)
+        ? [['a', 'Сторона нижнего основания'], ['t', 'Сторона верхнего основания']]
+        : [...BASES[s.base].params, ['k', 'Коэффициент подобия верхнего основания']]),
+      ['h', 'Высота'], ...apexParams(s),
+    ],
   },
 };
 
-export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1' };
+export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1', m: '2', k: '1/2', sx: '1', sy: '1', dx: '1', dy: '1', pts: '0 0; 4 0; 5 3; 1 4' };
 
 export function defaultSpec(kind) {
   const k = KINDS[kind];
-  return { kind, base: k.bases ? (kind === 'prism' ? 'tri' : 'sq') : null, apex: 'center', p: { ...DEFAULT_PARAMS } };
+  return { kind, base: k.bases ? (kind === 'prism' ? 'tri' : 'sq') : null, apex: 'center', tilt: 'right', p: { ...DEFAULT_PARAMS } };
 }
 
-const LETTERS = 'ABCDEF';
+const LETTERS = 'ABCDEFGH';
+
+/** «0 0; 4 0; 5 3» → точные координаты вершин выпуклого многоугольника */
+function parsePolygon(src) {
+  const pts = String(src).split(/[;\n]+/).map((t) => t.trim()).filter(Boolean).map((t, i) => {
+    const xy = t.split(/\s+/);
+    if (xy.length !== 2) throw new Error(`вершина ${LETTERS[i] || i + 1}: нужны две координаты через пробел, например «4 0»`);
+    return xy.map((v) => parseNum(v));
+  });
+  if (pts.length < 3) throw new Error('нужно не меньше трёх вершин');
+  if (pts.length > LETTERS.length) throw new Error(`не больше ${LETTERS.length} вершин`);
+  const n = pts.length;
+  const area2 = (p, q, r) => q[0].sub(p[0]).mul(r[1].sub(p[1])).sub(q[1].sub(p[1]).mul(r[0].sub(p[0]))).sign();
+  const turn = pts.map((p, i) => area2(p, pts[(i + 1) % n], pts[(i + 2) % n]));
+  if (turn.includes(0)) throw new Error('три соседние вершины лежат на одной прямой (или вершины совпадают)');
+  // все повороты в одну сторону и «веер» из первой вершины не выворачивается — значит, многоугольник выпуклый
+  const fan = pts.slice(1, -1).map((p, i) => area2(pts[0], p, pts[i + 2]));
+  if ([...turn, ...fan].some((t) => t !== turn[0])) throw new Error('многоугольник должен быть выпуклым, а вершины — идти по порядку обхода');
+  return pts;
+}
 
 /** Основание в плоскости z = 0, обход против часовой стрелки (если смотреть сверху) */
 function basePolygon(base, p) {
   const h = (x) => x.div(TWO);
-  const { a, b, d1, d2 } = p;
+  const { a, b, c, m, d1, d2 } = p;
+  const centroid = (pts) => [0, 1].map((k) => pts.reduce((s, q) => s.add(q[k]), ZERO).div(N(pts.length)));
   switch (base) {
+    case 'tri3': {
+      const x = a.sq().add(c.sq()).sub(b.sq()).div(a.mul(TWO));
+      const y2 = c.sq().sub(x.sq());
+      if (y2.sign() <= 0) throw new Error('Треугольника с такими сторонами не существует: каждая сторона должна быть меньше суммы двух других.');
+      const y = sqrtNum(y2);
+      if (!y) throw new Error('При таких сторонах координаты вершины C выражаются вложенным радикалом — такой треугольник не поддерживается.');
+      const pts = [[ZERO, ZERO], [a, ZERO], [x, y]];
+      return { pts, center: centroid(pts) };
+    }
+    case 'trap': {
+      const pts = [[ZERO, ZERO], [h(a.sub(b)), m], [h(a.add(b)), m], [a, ZERO]];
+      return { pts, center: centroid(pts) };
+    }
+    case 'poly': return { pts: p.pts, center: centroid(p.pts) };
     case 'tri': return { pts: [[ZERO, ZERO], [a, ZERO], [h(a), h(a.mul(SQ3))]], center: [h(a), a.mul(SQ3).div(N(6))] };
     case 'rtri': return { pts: [[a, ZERO], [ZERO, b], [ZERO, ZERO]], center: [h(a), h(b)] };
     case 'sq': return { pts: [[ZERO, ZERO], [a, ZERO], [a, a], [ZERO, a]], center: [h(a), h(a)] };
@@ -72,12 +121,19 @@ export function buildSolid(spec) {
   const kind = KINDS[spec.kind];
   if (!kind) throw new Error('Неизвестная фигура');
   const p = {};
-  for (const [key, label] of kind.params(spec)) {
+  for (const [key, label, mode] of kind.params(spec)) {
+    const raw = spec.p[key] ?? DEFAULT_PARAMS[key];
     let v;
-    try { v = parseNum(spec.p[key]); } catch (e) { throw new Error(`${label}: ${e.message}`); }
-    if (v.sign() <= 0) throw new Error(`${label}: размер должен быть положительным`);
+    try { v = mode === 'pts' ? parsePolygon(raw) : parseNum(raw); } catch (e) { throw new Error(`${mode === 'pts' ? 'Основание' : label}: ${e.message}`); }
+    if (!mode && v.sign() <= 0) throw new Error(`${label}: размер должен быть положительным`);
     p[key] = v;
   }
+  let baseInfo = null;
+  // Куда проецируется вершина пирамиды (для усечённой — вершина полной пирамиды)
+  const apexFoot = ({ pts, center }) => {
+    if (spec.apex === 'custom') return [p.sx, p.sy];
+    return spec.apex === 'center' || !(+spec.apex < pts.length) ? center : pts[+spec.apex];
+  };
 
   let names = [], verts = [], faces = [];
   const prismLike = (base, top, h) => {
@@ -91,18 +147,26 @@ export function buildSolid(spec) {
   switch (spec.kind) {
     case 'cube': { const b = basePolygon('sq', p).pts; prismLike(b, b, p.a); break; }
     case 'box': { const b = basePolygon('rect', p).pts; prismLike(b, b, p.c); break; }
-    case 'prism': { const b = basePolygon(spec.base, p).pts; prismLike(b, b, p.h); break; }
+    case 'prism': {
+      baseInfo = basePolygon(spec.base, p);
+      const b = baseInfo.pts;
+      prismLike(b, spec.tilt === 'oblique' ? b.map(([x, y]) => [x.add(p.dx), y.add(p.dy)]) : b, p.h);
+      break;
+    }
     case 'frustum': {
-      const { pts, center } = basePolygon(spec.base, p);
-      const k = p.t.div(p.a);
+      baseInfo = basePolygon(spec.base, p);
+      const { pts } = baseInfo;
+      const k = REGULAR.includes(spec.base) ? p.t.div(p.a) : p.k;
+      const center = apexFoot(baseInfo);
       const top = pts.map(([x, y]) => [center[0].add(x.sub(center[0]).mul(k)), center[1].add(y.sub(center[1]).mul(k))]);
       prismLike(pts, top, p.h);
       break;
     }
     case 'pyramid': {
-      const { pts, center } = basePolygon(spec.base, p);
+      baseInfo = basePolygon(spec.base, p);
+      const { pts } = baseInfo;
       const n = pts.length;
-      const foot = spec.apex === 'center' || !(+spec.apex < n) ? center : pts[+spec.apex];
+      const foot = apexFoot(baseInfo);
       names = [...LETTERS.slice(0, n), 'S'];
       verts = [...pts.map(([x, y]) => [x, y, ZERO]), [foot[0], foot[1], p.h]];
       const idx = [...Array(n).keys()];
@@ -143,6 +207,8 @@ export function buildSolid(spec) {
   const facePts = faces.map((f) => f.map((i) => verts[i]));
   return {
     spec, names, verts, faces, edges, planes, centroid, params: p,
+    baseSize: baseInfo ? baseInfo.pts.length : 0,
+    baseCoords: baseInfo ? baseInfo.pts.map(([x, y], i) => `${LETTERS[i]}(${fmtNum(x)}; ${fmtNum(y)})`).join(', ') : '',
     faceNames,
     volume: facesVolume(facePts, verts[0]),
     surface: sumVals(facePts.map(polygonArea)),

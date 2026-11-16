@@ -1,4 +1,4 @@
-import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain } from '../math/num.js';
+import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain, parseNum } from '../math/num.js';
 import { toFloat } from '../math/vec.js';
 import { KINDS, BASES, DEFAULT_PARAMS, buildSolid, defaultSpec } from '../geom/solids.js';
 import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.js';
@@ -185,6 +185,17 @@ view.onHover = (x, y) => {
 
 // ─────────────────────────────── левая панель ───────────────────────────────
 
+/** Числовое значение размера для положения ползунка (сам размер остаётся точным) */
+function approxOf(raw) { try { return parseNum(raw).toNumber(); } catch { return NaN; } }
+
+/** Ползунок шагает по «хорошим» дробям, поэтому значения остаются точными */
+function sliderHtml(key, mode, raw, label) {
+  const v = approxOf(raw);
+  const [min, max, step] = mode === 'any' ? [-10, 10, 0.25] : key === 'k' ? [0.05, 2, 0.05] : [0.25, 12, 0.25];
+  const hi = Number.isFinite(v) ? Math.max(max, Math.ceil(v)) : max, lo = Number.isFinite(v) ? Math.min(min, Math.floor(v)) : min;
+  return `<input type="range" data-slide="${key}" min="${mode === 'any' ? lo : min}" max="${hi}" step="${step}" value="${Number.isFinite(v) ? v : min}" aria-label="${esc(label)}: ползунок">`;
+}
+
 function renderFigure() {
   const s = state.spec, k = KINDS[s.kind];
   const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
@@ -201,7 +212,7 @@ function renderFigure() {
     const val = esc(s.p[key] ?? DEFAULT_PARAMS[key]);
     return mode === 'pts'
       ? `<label class="field wide"><span>${esc(label)}</span><textarea data-param="${key}" rows="3" spellcheck="false">${val}</textarea></label>`
-      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${val}" spellcheck="false" autocomplete="off"></label>`;
+      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${val}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, s.p[key] ?? DEFAULT_PARAMS[key], label)}</label>`;
   }).join('') + '</div>';
   html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code>.</p>';
   $('#figure').innerHTML = html;
@@ -291,8 +302,25 @@ function renderResults() {
 
 // ──────────────────────────────── события ────────────────────────────────
 
+// Ползунок: фигура перестраивается на лету, в историю отмены попадает одно движение целиком
+let sliding = false;
+$('#figure').addEventListener('input', (e) => {
+  const key = e.target.dataset.slide;
+  if (!key) return;
+  if (!sliding) { commit(); sliding = true; }
+  const value = fmtNum(parseNum(e.target.value));
+  state.spec = { ...state.spec, p: { ...state.spec.p, [key]: value } };
+  $(`#figure [data-param="${key}"]`).value = value;
+  refresh();
+});
+
 $('#figure').addEventListener('change', (e) => {
   const t = e.target;
+  if (t.dataset.slide) { sliding = false; return; }
+  if (t.dataset.param && t.dataset.param !== 'pts') {
+    const sl = $(`#figure [data-slide="${t.dataset.param}"]`), v = approxOf(t.value);
+    if (sl && Number.isFinite(v)) { sl.max = Math.max(+sl.max, Math.ceil(v)); sl.min = Math.min(+sl.min, Math.floor(v)); sl.value = v; }
+  }
   if (t.dataset.spec) {
     commit();
     const key = t.dataset.spec;
@@ -357,4 +385,3 @@ document.addEventListener('keydown', (e) => {
 
 syncViewControls();
 refresh(true);
-void fmtNum;

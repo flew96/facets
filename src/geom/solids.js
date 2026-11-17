@@ -1,6 +1,7 @@
 // Фигуры: точные координаты вершин, грани (с внешней ориентацией), рёбра.
 import { N, ZERO, TWO, parseNum, rootOf, sqrtNum, sumVals, fmtNum } from '../math/num.js';
 import { add, sub, scale, dot, cross, det, len2 } from '../math/vec.js';
+import { buildRound } from './round.js';
 
 const SQ3 = parseNum('√3'), SQ6 = parseNum('√6');
 
@@ -38,9 +39,14 @@ export const KINDS = {
       ['h', 'Высота'], ...apexParams(s),
     ],
   },
+  // Тела вращения строятся отдельной веткой кода — см. round.js
+  cylinder: { title: 'Цилиндр', round: true, params: () => [['r', 'Радиус основания'], ['h', 'Высота']] },
+  cone: { title: 'Конус', round: true, params: () => [['r', 'Радиус основания'], ['h', 'Высота']] },
+  conefrustum: { title: 'Усечённый конус', round: true, params: () => [['r', 'Радиус нижнего основания'], ['r2', 'Радиус верхнего основания'], ['h', 'Высота']] },
+  ball: { title: 'Шар', round: true, params: () => [['r', 'Радиус']] },
 };
 
-export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1', m: '2', k: '1/2', sx: '1', sy: '1', dx: '1', dy: '1', pts: '0 0; 4 0; 5 3; 1 4' };
+export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1', m: '2', k: '1/2', sx: '1', sy: '1', r: '3', r2: '1', dx: '1', dy: '1', pts: '0 0; 4 0; 5 3; 1 4' };
 
 export function defaultSpec(kind) {
   const k = KINDS[kind];
@@ -128,6 +134,7 @@ export function buildSolid(spec) {
     if (!mode && v.sign() <= 0) throw new Error(`${label}: размер должен быть положительным`);
     p[key] = v;
   }
+  if (kind.round) return buildRound(spec, p);
   let baseInfo = null;
   // Куда проецируется вершина пирамиды (для усечённой — вершина полной пирамиды)
   const apexFoot = ({ pts, center }) => {

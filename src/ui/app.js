@@ -2,6 +2,7 @@ import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain, parseNum } from '../ma
 import { toFloat } from '../math/vec.js';
 import { KINDS, BASES, DEFAULT_PARAMS, buildSolid, defaultSpec } from '../geom/solids.js';
 import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.js';
+import { roundTools, roundToolGroups, evaluateRound, ANGLE_STEP } from '../geom/round.js';
 import { buildTrace } from '../geom/trace.js';
 import { explain } from '../geom/explain.js';
 import { View, HOME } from './view.js';
@@ -22,6 +23,11 @@ const TOOL_GROUPS = [
   ['Сферы', ['sphereIn', 'sphereOut']],
   ['Измерения', ['dist', 'angleLL', 'angleLP', 'anglePP']],
 ];
+
+// Тела вращения — отдельная ветка: свои инструменты и свой пересчёт построений
+const toolsNow = () => (solid?.round ? roundTools(solid.shape) : TOOLS);
+const groupsNow = () => (solid.round ? roundToolGroups(solid.shape) : TOOL_GROUPS);
+const evalNow = () => (solid.round ? evaluateRound : evaluate)(solid, state.items);
 
 const freshState = (ex) => ({ opts: { alpha: 0.1, hidden: true, labels: true }, ...structuredClone(ex.state) });
 
@@ -67,7 +73,7 @@ function fromHash() {
 
 function refresh(figureChanged = false) {
   try { solid = buildSolid(state.spec); specError = null; } catch (e) { specError = e.message; if (!solid) solid = buildSolid(defaultSpec('cube')); }
-  ctx = evaluate(solid, state.items);
+  ctx = evalNow();
   traces.clear();
   if (ui.steps && !traceOf(ui.steps.id)) ui.steps = null;
   view.opts = state.opts;
@@ -165,6 +171,7 @@ function buildScene() {
       L.polys = (dr.polys || []).map((p) => ({ pts: p.pts.map(F), cls: p.cls }));
     }
     L.marks = (dr.marks || []).map((m) => ({ at: F(m.at), u: D(m.u), v: D(m.v) }));
+    L.circs = (dr.circs || []).map((s) => ({ c: F(s.c), n: D(s.n), rho: s.rho, cls: s.cls, fill: s.fill }));
     L.spheres = (dr.spheres || []).map((s) => ({ c: F(s.c), r: s.r }));
     L.dots = (dr.dots || []).map(F);
     layers.push(L);
@@ -174,6 +181,12 @@ function buildScene() {
     .filter((p) => !(hiddenNames && p.role === 'derived' && hiddenNames.has(p.name)))
     .map((p) => ({ ref: p.ref, name: p.name, p: F(p.pos), role: p.role, sel: picked.has(p), color: p.item ? colorOf(p.item) : null }));
   const scene = { verts, faces: solid.faces, edges: solid.edges, planes, layers, points, names: solid.names, radius: Math.max(...verts.map((v) => Math.hypot(...v))) };
+  if (solid.round) {
+    // тело вращения в координатах чертежа: ось z, центр — середина оси
+    const r0 = solid.r0.toNumber(), r1 = solid.r1.toNumber(), half = solid.h.toNumber() / 2;
+    scene.round = { ball: solid.shape === 'ball', R: r0, r0, r1, z0: -half, z1: half };
+    scene.radius = scene.round.ball ? r0 : Math.hypot(Math.max(r0, r1), half);
+  }
 
   // Отсечение: вместо фигуры рисуем её часть по одну сторону от сечения
   const cutIt = state.items.find((it) => it.cut && !it.hide && ctx.results.get(it.id).section && !ctx.results.get(it.id).section.onFace);
@@ -197,7 +210,7 @@ function nextColor() { return state.items.filter((it) => it.kind !== 'point').le
 function addPoint(def) {
   const id = newId();
   state.items.push({ id, kind: 'point', name: ctx.alloc(POINT_POOL), color: nextColor(), def });
-  ctx = evaluate(solid, state.items);
+  ctx = evalNow();
   return id;
 }
 
@@ -207,6 +220,7 @@ const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 function snapPick(pk) {
   const S = view.scene;
   if (pk.type === 'point') return { ref: pk.ref, p: S.points.find((p) => p.ref === pk.ref).p, label: '' };
+  if (pk.type === 'circ' || pk.type === 'gen') return snapRound(pk);
   if (pk.type === 'edge') {
     const k = Math.round(pk.t * SNAP);
     if (k === 0 || k === SNAP) { const i = k ? pk.j : pk.i; return { ref: 'v' + i, p: S.verts[i], label: '' }; }
@@ -230,8 +244,27 @@ function snapPick(pk) {
   };
 }
 
+/** То же для тела вращения: окружность основания — углы через 15°, образующая — двенадцатые доли */
+function snapRound(pk) {
+  const ang = String(pk.k * ANGLE_STEP);
+  const onRim = (base, p) => ({
+    def: { t: 'circ', base, ang }, p,
+    label: `${solid.shape === 'ball' ? 'экватор' : base ? 'окружность верхнего основания' : 'окружность нижнего основания'}, ${ang}°`,
+  });
+  if (pk.type === 'circ') return onRim(pk.base, pk.p);
+  const k = Math.round(pk.t * SNAP);
+  if (k === 0) return onRim(0, pk.a);
+  if (k === SNAP) return solid.shape === 'cone' ? { ref: 'v1', p: view.scene.verts[1], label: '' } : onRim(1, pk.b);
+  const g = gcd(k, SNAP - k), m = k / g, n = (SNAP - k) / g;
+  return {
+    def: { t: 'gen', ang, m: String(m), n: String(n) },
+    p: pk.a.map((x, q) => x + (pk.b[q] - x) * (k / SNAP)),
+    label: `образующая ${ang}°, ${m} : ${n} от нижнего основания`,
+  };
+}
+
 function startTool(name) {
-  const tool = TOOLS[name];
+  const tool = toolsNow()[name];
   ui.picked = [];
   if (tool.slots && tool.slots.length === 0) {
     commit();
@@ -254,7 +287,7 @@ function planeRefs(pk) {
 
 view.onPick = (x, y) => {
   if (!ui.tool || specError) return;
-  const tool = TOOLS[ui.tool], mode = pickMode(tool);
+  const tool = toolsNow()[ui.tool], mode = pickMode(tool);
   const pk = view.pick(x, y, mode);
   if (!pk) return;
   if (tool.face) {
@@ -286,7 +319,7 @@ view.onPick = (x, y) => {
 view.onHover = (x, y) => {
   let pv = null;
   if (ui.tool && !specError) {
-    const tool = TOOLS[ui.tool], mode = pickMode(tool);
+    const tool = toolsNow()[ui.tool], mode = pickMode(tool);
     const pk = view.pick(x, y, mode);
     if (pk && tool.face) pv = { p: pk.p, label: `грань ${solid.faceNames[pk.f]}` };
     else if (pk && mode === 'plane' && pk.type === 'face') pv = { p: pk.p, label: `плоскость грани ${solid.faceNames[pk.f]}` };
@@ -338,25 +371,27 @@ function valHtml(v) {
 function renderFigureInfo() {
   $('#figure-info').innerHTML = specError
     ? `<p class="err">${esc(specError)}</p>`
-    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface)}</dd></dl>`
+    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface)}</dd>${(solid.info || []).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${valHtml(v)}</dd>`).join('')}</dl>`
       + (solid.baseCoords && (state.spec.apex === 'custom' || state.spec.tilt === 'oblique' || state.spec.base === 'poly')
         ? `<p class="fine coords">Координаты основания: ${esc(solid.baseCoords)}</p>` : '');
 }
 
 function renderTools() {
-  $('#tools').innerHTML = TOOL_GROUPS.map(([title, names]) => `<div class="group"><h4>${title}</h4>${names.map((n) => `<button class="tool${ui.tool === n ? ' on' : ''}" data-tool="${n}">${esc(TOOLS[n].title)}</button>`).join('')}</div>`).join('');
+  const TOOLS = toolsNow();
+  $('#tools').innerHTML = groupsNow().map(([title, names]) => `<div class="group"><h4>${title}</h4>${names.map((n) => `<button class="tool${ui.tool === n ? ' on' : ''}" data-tool="${n}">${esc(TOOLS[n].title)}</button>`).join('')}</div>`).join('');
 }
 
 function renderHint() {
   const el = $('#hint');
-  if (!ui.tool) { el.hidden = true; return; }
-  const tool = TOOLS[ui.tool];
+  const tool = ui.tool && toolsNow()[ui.tool];
+  if (!tool) { ui.tool = null; el.hidden = true; return; }
   const chips = ui.picked.map((r) => `<span class="chip">${esc(ctx.points.get(r)?.name ?? '?')}</span>`).join('');
   let what = esc(tool.hint || '');
   if (tool.slots) {
     const plane = pickMode(tool) === 'plane';
     const how = view.scene?.locked ? 'существующая точка (пока часть фигуры отсечена, новые точки не ставятся)'
-      : plane ? 'три точки по очереди — или один клик по грани либо по готовому сечению' : 'вершина, точка на ребре или на грани';
+      : solid.round ? (solid.shape === 'ball' ? 'отмеченная точка или точка экватора' : 'отмеченная точка, точка окружности основания или точка на образующей')
+        : plane ? 'три точки по очереди — или один клик по грани либо по готовому сечению' : 'вершина, точка на ребре или на грани';
     what = `Выберите: <b>${plane ? 'плоскость' : tool.slots[ui.picked.length]}</b> <span class="fine">(${ui.picked.length + 1} из ${tool.slots.length}) — ${how}</span>`;
   }
   el.hidden = false;
@@ -396,7 +431,7 @@ function sectionExtras(it, r) {
   const tr = traceOf(it.id), stepping = ui.steps?.id === it.id;
   if (tr) body += `<button data-act="steps"${stepping ? ' class="on"' : ''}>${stepping ? 'Закрыть построение' : 'Построить по шагам'}</button>`;
   body += `<button data-act="unfold">${ui.unfolded.has(it.id) ? 'Свернуть' : 'Натуральная величина'}</button><button data-act="look">Смотреть перпендикулярно</button>`;
-  if (!r.section.onFace) body += `<button data-act="cut"${it.cut ? ' class="on"' : ''}>${CUT_LABEL[it.cut || 0]}</button>`;
+  if (!r.section.onFace && !solid.round) body += `<button data-act="cut"${it.cut ? ' class="on"' : ''}>${CUT_LABEL[it.cut || 0]}</button>`;
   body += '</div>';
   if (stepping) {
     const k = ui.steps.k;
@@ -409,7 +444,7 @@ function sectionExtras(it, r) {
 function renderResults() {
   const el = $('#results');
   if (!state.items.length) {
-    el.innerHTML = '<p class="empty">Построений пока нет. Выберите инструмент слева и кликайте по вершинам, рёбрам и граням фигуры — точки на рёбрах привязываются к «хорошим» отношениям (½, ⅓, ¼…). Или откройте готовый пример из списка выше.</p>';
+    el.innerHTML = `<p class="empty">Построений пока нет. Выберите инструмент слева и кликайте по ${solid.round ? 'фигуре: точки на окружности основания ставятся через 15°, точки на образующих — в «хороших» отношениях' : 'вершинам, рёбрам и граням фигуры — точки на рёбрах привязываются к «хорошим» отношениям'} (½, ⅓, ¼…). Или откройте готовый пример из списка выше.</p>`;
     return;
   }
   el.innerHTML = state.items.map((it) => {
@@ -420,8 +455,14 @@ function renderResults() {
       const a = ctx.points.get(it.def.a)?.name ?? '?', b = ctx.points.get(it.def.b)?.name ?? '?';
       body += `<div class="ratio">${esc(a + it.name)} : ${esc(it.name + b)} = <input data-ratio="m" value="${esc(it.def.m)}" aria-label="первая часть отношения"> : <input data-ratio="n" value="${esc(it.def.n)}" aria-label="вторая часть отношения"></div>`;
     }
+    if (isPoint && it.def.t === 'gen') body += `<div class="ratio">от нижнего основания <input data-ratio="m" value="${esc(it.def.m)}" aria-label="первая часть отношения"> : <input data-ratio="n" value="${esc(it.def.n)}" aria-label="вторая часть отношения"></div>`;
+    if (solid.round && (it.kind === 'axial' || (isPoint && it.def.t !== 'ratio'))) {
+      const cur = String(it.def?.ang ?? '0');
+      const angles = Array.from({ length: 360 / ANGLE_STEP }, (_, k) => String(k * ANGLE_STEP));
+      body += `<label class="ratio">Угол поворота <select data-ang aria-label="Угол поворота">${angles.map((a) => `<option value="${a}"${a === cur ? ' selected' : ''}>${a}°</option>`).join('')}</select></label>`;
+    }
     if (r.error) body += `<p class="err">${esc(r.error)}</p>`;
-    if (r.absent) body += '<p class="badge">не существует</p>';
+    if (r.absent || r.badge) body += `<p class="badge">${esc(r.badge || 'не существует')}</p>`;
     if (r.section) body += sectionExtras(it, r);
     const rows = isPoint && it.def.t === 'ratio' ? [] : r.rows;
     if (rows.length) body += '<dl>' + rows.map((x) => `<dt>${esc(x.k)}</dt><dd><b>${esc(x.v)}</b>${x.a ? ` <span class="approx">≈ ${x.a}</span>` : ''}</dd>`).join('') + '</dl>';
@@ -430,7 +471,7 @@ function renderResults() {
     if (sol) body += `<details class="sol"${ui.solOpen.has(it.id) ? ' open' : ''}><summary>Решение методом координат</summary><ol>${sol.map((l) => `<li>${esc(l)}</li>`).join('')}</ol></details>`;
     const title = isPoint
       ? `<h3>Точка <input class="rename" data-rename value="${esc(it.name)}" maxlength="4" aria-label="Имя точки" title="Имя можно изменить"></h3>`
-      : `<h3>${esc(r.title || TOOLS[it.kind].title)}</h3>`;
+      : `<h3>${esc(r.title || toolsNow()[it.kind]?.title || 'Построение')}</h3>`;
     return `<article class="card${it.hide ? ' dim' : ''}${isPoint ? ' small' : ''}" data-id="${it.id}" style="--c:${COLORS[it.color % COLORS.length]}">
       <header>${title}
       ${isPoint ? '' : `<button data-act="hide" title="${it.hide ? 'Показать' : 'Скрыть'} на чертеже">${it.hide ? '○' : '●'}</button>`}
@@ -441,6 +482,7 @@ function renderResults() {
 // ──────────────────────────── развёртка и файлы ────────────────────────────
 
 function showNet() {
+  if (solid.round) return toast('Развёртка пока строится только для многогранников');
   const whole = { verts: solid.verts.map(toFloat), faces: solid.faces, names: solid.names };
   whole.planes = solid.planes.map((pl, i) => { const n = toFloat(pl.n), l = Math.hypot(...n), u = n.map((x) => x / l); return { n: u, d: dotF(u, whole.verts[solid.faces[i][0]]) }; });
   const sections = state.items.filter((it) => SECTIONS.includes(it.kind) && !it.hide && ctx.results.get(it.id).section)
@@ -562,6 +604,10 @@ $('#results').addEventListener('change', (e) => {
   if (t.dataset.ratio) {
     commit();
     it.def = { ...it.def, [t.dataset.ratio]: t.value.trim() };
+    refresh();
+  } else if ('ang' in t.dataset) {
+    commit();
+    it.def = { ...it.def, ang: t.value };
     refresh();
   } else if ('rename' in t.dataset) {
     const name = t.value.trim();

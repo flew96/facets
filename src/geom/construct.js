@@ -49,7 +49,7 @@ export function withDependents(items, id) {
 const row = (k, val, unit = '') => ({ k, v: fmtVal(val) + unit, a: isPlain(val) ? '' : fmtApprox(valToNumber(val)) });
 const text = (k, v) => ({ k, v, a: '' });
 
-export function evaluate(solid, items) {
+export function evaluate(solid, items, handlers = EVAL) {
   const points = new Map();
   const used = new Set(solid.names);
   solid.verts.forEach((pos, i) => points.set('v' + i, { ref: 'v' + i, name: solid.names[i], pos, role: 'vertex' }));
@@ -80,7 +80,10 @@ export function evaluate(solid, items) {
 
   for (const it of items) {
     let res;
-    try { res = EVAL[it.kind](it, ctx); } catch (e) { res = { error: e.message }; }
+    try {
+      if (!handlers[it.kind]) throw new Error('Это построение неприменимо к выбранной фигуре.');
+      res = handlers[it.kind](it, ctx);
+    } catch (e) { res = { error: e.message }; }
     ctx.results.set(it.id, { rows: [], notes: [], draw: {}, ...res });
   }
   return ctx;
@@ -182,7 +185,7 @@ function angleRows(x2, fn) {
 
 // ─────────────────────────────── построения ───────────────────────────────
 
-const EVAL = {
+export const EVAL = {
   point(it, ctx) {
     const S = ctx.solid, d = it.def;
     let pos, desc, draw = {};

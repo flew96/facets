@@ -206,7 +206,10 @@ export function sqrtNum(x, depth = 0) {
 
 // ───────────────────────── Значения-результаты ─────────────────────────
 // Val — либо Num, либо { root: Num } (корень, который не упрощается: √(5+√3)),
-// либо { sum: Val[] }.
+// либо { sum: Val[] }, либо { pi: Val } — значение, умноженное на π (π — символ, не число).
+
+/** v·π */
+export const piVal = (v) => ({ pi: v });
 
 /** √x как Val */
 export function rootOf(x) {
@@ -216,6 +219,7 @@ export function rootOf(x) {
 
 export function valToNumber(v) {
   if (v instanceof Num) return v.toNumber();
+  if (v.pi) return Math.PI * valToNumber(v.pi);
   if (v.root) return Math.sqrt(v.root.toNumber());
   return v.sum.reduce((s, t) => s + valToNumber(t), 0);
 }
@@ -271,8 +275,20 @@ export function fmtNum(x) {
   return num.length === 1 ? `${s}/${den}` : `(${s})/${den}`;
 }
 
+/** k·π: 12π, 4π/3, 2π√3, π(1 + √5)/2 */
+function fmtPi(k) {
+  if (!(k instanceof Num)) return k.sum ? `π(${fmtVal(k)})` : `π·${fmtVal(k)}`;
+  if (k.isZero()) return '0';
+  const { num, den } = overCommonDen(k);
+  const tail = den === 1n ? '' : `/${den}`;
+  if (num.length > 1) return `π(${numeratorStr(num)})${tail}`;
+  const [r, c] = num[0], a = abs(c);
+  return `${c < 0n ? '−' : ''}${a === 1n ? '' : a}π${r === 1n ? '' : `√${r}`}${tail}`;
+}
+
 export function fmtVal(v) {
   if (v instanceof Num) return fmtNum(v);
+  if (v.pi) return fmtPi(v.pi);
   if (v.sum) return v.sum.map(fmtVal).join(' + ');
   // √x, x не упрощается: выносим рациональный множитель
   const { num, den } = overCommonDen(v.root);

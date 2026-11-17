@@ -1,6 +1,7 @@
 // Фигуры: точные координаты вершин, грани (с внешней ориентацией), рёбра.
 import { N, ZERO, TWO, parseNum, parseDim, rootOf, sqrtNum, sumVals, fmtNum } from '../math/num.js';
 import { add, sub, scale, dot, cross, det, len2 } from '../math/vec.js';
+import { buildRound } from './round.js';
 
 const SQ3 = parseNum('√3'), SQ6 = parseNum('√6');
 
@@ -51,9 +52,14 @@ export const KINDS = {
       ['h', 'Высота'], ...apexParams(s),
     ],
   },
+  // Тела вращения строятся отдельной веткой кода — см. round.js
+  cylinder: { title: 'Цилиндр', round: true, params: () => [['r', 'Радиус основания'], ['h', 'Высота']] },
+  cone: { title: 'Конус', round: true, params: () => [['r', 'Радиус основания'], ['h', 'Высота']] },
+  conefrustum: { title: 'Усечённый конус', round: true, params: () => [['r', 'Радиус нижнего основания'], ['r2', 'Радиус верхнего основания'], ['h', 'Высота']] },
+  ball: { title: 'Шар', round: true, params: () => [['r', 'Радиус']] },
 };
 
-export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1', m: '2', k: '1/2', sx: '1', sy: '1', dx: '1', dy: '1', pts: '0 0; 4 0; 5 3; 1 4' };
+export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1', m: '2', k: '1/2', sx: '1', sy: '1', r: '3', r2: '1', dx: '1', dy: '1', pts: '0 0; 4 0; 5 3; 1 4' };
 
 export function defaultSpec(kind) {
   const k = KINDS[kind];
@@ -157,6 +163,10 @@ export function buildSolid(spec) {
     // ноль (координата или сдвиг) годится и с буквой: 0 = 0·a
     const bare = lengths.find((d) => !d.sym && !d.v.isZero());
     if (bare) throw new Error(`${bare.label}: число без буквы нельзя смешивать с буквенными размерами. Запишите этот размер через ${unit} (например, 2${unit} или ${unit}/2) либо задайте все размеры числами.`);
+  }
+  if (kind.round) {
+    if (unit) throw new Error(`Для тел вращения размеры пока задаются только числами: построения на них ещё не умеют выводить ответ через букву ${unit}.`);
+    return buildRound(spec, p);
   }
   let baseInfo = null;
   // Куда проецируется вершина пирамиды (для усечённой — вершина полной пирамиды)

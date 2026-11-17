@@ -8,6 +8,7 @@ const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[
 const crossF = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const unit = (a) => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const f1 = (x) => x.toFixed(1);
+const f2 = (x) => x.toFixed(2);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export const HOME = { yaw: -1.12, pitch: 0.36 };
@@ -45,6 +46,7 @@ export class View {
 
   /** Точка закрыта фигурой, если луч к наблюдателю проходит через её внутренность */
   hiddenAt(p, d) {
+    if (this.scene.round) return this.hiddenRound(p, d);
     const tol = 1e-6 * this.scene.radius;
     let lo = tol, hi = Infinity;
     for (const pl of this.scene.planes) {
@@ -54,6 +56,41 @@ export class View {
       else if (b > tol) return false;
     }
     return hi - lo > tol * 10;
+  }
+
+  /**
+   * То же для тела вращения. Тело — выпуклое: слой z0 ≤ z ≤ z1, внутри которого
+   * x² + y² ≤ ρ(z)², ρ линейно по z (у шара — x² + y² + z² ≤ R²). Луч p + s·d лежит
+   * внутри при тех s, где квадратный трёхчлен неположителен, — решаем его аналитически.
+   */
+  hiddenRound(p, d) {
+    const R = this.scene.round, tol = 1e-6 * this.scene.radius;
+    let lo = tol, hi = Infinity, A, B, C;
+    if (R.ball) {
+      A = 1; B = 2 * dot(p, d); C = dot(p, p) - R.R * R.R;
+    } else {
+      if (Math.abs(d[2]) > 1e-12) {
+        const s0 = (R.z0 - p[2]) / d[2], s1 = (R.z1 - p[2]) / d[2];
+        lo = Math.max(lo, Math.min(s0, s1)); hi = Math.min(hi, Math.max(s0, s1));
+      } else if (p[2] < R.z0 - tol || p[2] > R.z1 + tol) return false;
+      const k = (R.r1 - R.r0) / (R.z1 - R.z0), rho = R.r0 + k * (p[2] - R.z0);
+      A = d[0] * d[0] + d[1] * d[1] - k * k * d[2] * d[2];
+      B = 2 * (p[0] * d[0] + p[1] * d[1] - rho * k * d[2]);
+      C = p[0] * p[0] + p[1] * p[1] - rho * rho;
+    }
+    // промежутки, где A·s² + B·s + C ≤ 0
+    let ivs;
+    if (Math.abs(A) < 1e-12) {
+      ivs = Math.abs(B) < 1e-12 ? (C <= 0 ? [[-Infinity, Infinity]] : []) : B > 0 ? [[-Infinity, -C / B]] : [[-C / B, Infinity]];
+    } else {
+      const D = B * B - 4 * A * C;
+      if (D <= 0) ivs = A > 0 ? [] : [[-Infinity, Infinity]];
+      else {
+        const q = Math.sqrt(D), s1 = (-B - q) / (2 * A), s2 = (-B + q) / (2 * A), a = Math.min(s1, s2), b = Math.max(s1, s2);
+        ivs = A > 0 ? [[a, b]] : [[-Infinity, a], [b, Infinity]];
+      }
+    }
+    return ivs.some(([a, b]) => Math.min(b, hi) - Math.max(a, lo) > tol * 10);
   }
 
   /** Разбивает отрезок на видимые и невидимые участки */
@@ -91,6 +128,77 @@ export class View {
       else back.push(`<polygon class="face back" points="${pts}"/>`);
     });
 
+    // Окружность в пространстве: c + ρ·(e1·cos t + e2·sin t). Её параллельная проекция — эллипс;
+    // он задаётся дугами SVG (полуоси и поворот считаются из проекций e1 и e2), а не ломаной.
+    const circle = (c, n, rho) => {
+      const k = unit(n), e1 = Math.abs(k[2]) > 0.9999999 ? [1, 0, 0] : unit(crossF(k, [0, 0, 1])), e2 = crossF(k, e1);
+      const o = P(c);
+      const a = [dot(e1, r) * rho * sc, -dot(e1, u) * rho * sc], b = [dot(e2, r) * rho * sc, -dot(e2, u) * rho * sc];
+      const sxx = a[0] * a[0] + b[0] * b[0], syy = a[1] * a[1] + b[1] * b[1], sxy = a[0] * a[1] + b[0] * b[1];
+      const m = (sxx + syy) / 2, q = Math.hypot((sxx - syy) / 2, sxy);
+      const rx = Math.sqrt(m + q), ry = Math.max(Math.sqrt(Math.max(0, m - q)), 0.02);
+      const rot = (Math.atan2(2 * sxy, sxx - syy) / 2) * (180 / Math.PI);
+      const sweep = a[0] * b[1] - a[1] * b[0] > 0 ? 1 : 0;
+      const at = (t) => [o[0] + a[0] * Math.cos(t) + b[0] * Math.sin(t), o[1] + a[1] * Math.cos(t) + b[1] * Math.sin(t)];
+      const to = (t0, t1) => {
+        // дуги короче полуоборота задаются однозначно, длинные делим пополам
+        if (t1 - t0 > Math.PI - 1e-9) { const tm = (t0 + t1) / 2; return to(t0, tm) + to(tm, t1); }
+        const q1 = at(t1);
+        return `A${f2(rx)} ${f2(ry)} ${f2(rot)} 0 ${sweep} ${f2(q1[0])} ${f2(q1[1])}`;
+      };
+      const arc = (t0, t1) => { const p0 = at(t0); return `M${f2(p0[0])} ${f2(p0[1])}${to(t0, t1)}`; };
+      return { c, rho, e1, e2, sweep, arc, full: () => `${arc(0, 2 * Math.PI)}Z` };
+    };
+    // Видимая часть окружности, лежащей на поверхности тела вращения: точка видна, когда внешняя
+    // нормаль к поверхности в ней обращена к наблюдателю, то есть A·cos t + B·sin t + K > 0.
+    // rim: 0 или 1 — окружность основания (видна целиком, если основание обращено к наблюдателю).
+    const windowOf = (C, rim) => {
+      const R = S.round;
+      let A, B, K;
+      if (R.ball) { A = dot(C.e1, d) * C.rho; B = dot(C.e2, d) * C.rho; K = dot(C.c, d); }
+      else {
+        if ((rim === 0 && d[2] < -1e-9) || (rim === 1 && d[2] > 1e-9)) return { mid: 0, w: Math.PI };
+        const hh = R.z1 - R.z0;
+        A = hh * dot(C.e1, d); B = hh * dot(C.e2, d); K = (R.r0 - R.r1) * d[2];
+      }
+      const m = Math.hypot(A, B), x = m < 1e-12 ? (K > 0 ? -1 : 1) : -K / m;
+      return { mid: Math.atan2(B, A), w: x <= -1 ? Math.PI : x >= 1 ? 0 : Math.acos(x) };
+    };
+    const circ = (C, cls, style, rim) => {
+      const { mid, w } = S.round ? windowOf(C, rim) : { mid: 0, w: Math.PI };
+      if (w > 1e-6) vis.push(`<path class="${cls}"${style} d="${C.arc(mid - w, mid + w)}"/>`);
+      if (w < Math.PI - 1e-6 && o.hidden) hid.push(`<path class="${cls} hid"${style} d="${C.arc(mid + w, mid - w + 2 * Math.PI)}"/>`);
+      return { mid, w };
+    };
+
+    if (S.round) {
+      const R = S.round;
+      if (R.ball) {
+        // очерк шара в параллельной проекции — окружность того же радиуса
+        const q = P([0, 0, 0]), at = `cx="${f1(q[0])}" cy="${f1(q[1])}" r="${f1(R.R * sc)}"`;
+        front.push(`<circle class="face front" ${at} fill-opacity="${o.alpha}"/>`);
+        vis.push(`<circle class="edge outline" ${at}/>`);
+        circ(circle([0, 0, 0], [0, 0, 1], R.R), 'edge', '');
+      } else {
+        const rims = [[R.z0, R.r0, 0], [R.z1, R.r1, 1]].filter((q) => q[1] > 0).map(([z, rho, i]) => [circle([0, 0, z], [0, 0, 1], rho), i]);
+        let shape = '';
+        for (const [C, i] of rims) { circ(C, 'edge', '', i); shape += C.full(); }
+        // очерковые образующие: вдоль них касательная плоскость проходит через луч зрения
+        const { mid, w } = windowOf(rims[0][0]);
+        if (w > 1e-6 && w < Math.PI - 1e-6) {
+          const gen = (t) => [[R.r0 * Math.cos(t), R.r0 * Math.sin(t), R.z0], [R.r1 * Math.cos(t), R.r1 * Math.sin(t), R.z1]].map(P);
+          const g1 = gen(mid - w), g2 = gen(mid + w);
+          for (const [p, q] of [g1, g2]) vis.push(`<line class="edge" x1="${f1(p[0])}" y1="${f1(p[1])}" x2="${f1(q[0])}" y2="${f1(q[1])}"/>`);
+          // заливка — объединение оснований и четырёхугольника между очерковыми образующими (одним контуром, одинаковый обход)
+          let quad = [g1[0], g1[1], g2[1], g2[0]];
+          const area = quad.reduce((s, p, i) => { const q = quad[(i + 1) % 4]; return s + p[0] * q[1] - q[0] * p[1]; }, 0);
+          if ((area > 0) !== (rims[0][0].sweep === 1)) quad = quad.reverse();
+          shape += `M${quad.map((p) => `${f2(p[0])} ${f2(p[1])}`).join('L')}Z`;
+        }
+        front.push(`<path class="face front" fill-rule="nonzero" d="${shape}" fill-opacity="${o.alpha}"/>`);
+      }
+    }
+
     const seg = (a, b, cls, style) => {
       for (const [t0, t1, h] of this.runs(a, b, d)) {
         if (h && !o.hidden) continue;
@@ -109,6 +217,11 @@ export class View {
       const st = ` style="--c:${L.color}"`;
       for (const pg of L.polys || []) polys.push(`<polygon class="poly ${pg.cls}"${st} points="${pstr(pg.pts)}"/>`);
       for (const s of L.segs || []) seg(s.a, s.b, `seg ${s.cls}`, st);
+      for (const s of L.circs || []) {
+        const C = circle(s.c, s.n, s.rho);
+        if (s.fill) polys.push(`<path class="poly section"${st} d="${C.full()}"/>`);
+        circ(C, `seg ${s.cls}`, st);
+      }
       for (const m of L.marks || []) {
         const k = 9 / sc, a = unit(m.u), b = unit(m.v);
         const p1 = [0, 1, 2].map((i) => m.at[i] + a[i] * k), p2 = [0, 1, 2].map((i) => p1[i] + b[i] * k), p3 = [0, 1, 2].map((i) => m.at[i] + b[i] * k);
@@ -167,6 +280,7 @@ export class View {
     if (!S || !F) return null;
     const { cx, cy, sc, d, r, u } = F;
     const P = (p) => [cx + dot(p, r) * sc, cy - dot(p, u) * sc];
+    if (S.round) return this.pickRound(x, y, P, d);
     if (mode === 'pt' || mode === 'plane') {
       let best = null;
       for (const p of this._pts) {
@@ -215,6 +329,42 @@ export class View {
       if (inside) return { type: 'face', f: fi, p };
     }
     return null;
+  }
+
+  /**
+   * Тело вращения: отмеченная точка, точка окружности основания (углы через 15°)
+   * или точка на образующей (образующие — тоже через 15°).
+   */
+  pickRound(x, y, P, d) {
+    const R = this.scene.round;
+    let best = null;
+    for (const p of this._pts) {
+      const dist = Math.hypot(p.x - x, p.y - y);
+      if (dist < 13 && (!best || dist < best.dist)) best = { type: 'point', ref: p.ref, dist };
+    }
+    if (best) return best;
+    const at = (rho, z, k) => [rho * Math.cos((k * Math.PI) / 12), rho * Math.sin((k * Math.PI) / 12), z];
+    const rims = R.ball ? [[0, R.R, 0]] : [[R.z0, R.r0, 0], [R.z1, R.r1, 1]].filter((q) => q[1] > 0);
+    for (const [z, rho, base] of rims) {
+      for (let k = 0; k < 24; k++) {
+        const p = at(rho, z, k), q = P(p), dist = Math.hypot(q[0] - x, q[1] - y);
+        if (dist > 12) continue;
+        const score = dist + (this.hiddenAt(p, d) ? 7 : 0);
+        if (!best || score < best.score) best = { type: 'circ', base, k, p, score };
+      }
+    }
+    if (best || R.ball) return best;
+    for (let k = 0; k < 24; k++) {
+      const a3 = at(R.r0, R.z0, k), b3 = at(R.r1, R.z1, k), a = P(a3), b = P(b3);
+      const ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey;
+      if (l2 < 1) continue;
+      const t = Math.max(0, Math.min(1, ((x - a[0]) * ex + (y - a[1]) * ey) / l2));
+      const dist = Math.hypot(a[0] + ex * t - x, a[1] + ey * t - y);
+      if (dist > 9) continue;
+      const score = dist + (this.hiddenAt(mix(a3, b3, t), d) ? 7 : 0);
+      if (!best || score < best.score) best = { type: 'gen', k, t, a: a3, b: b3, score };
+    }
+    return best;
   }
 
   animateTo(yaw, pitch) {

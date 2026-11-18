@@ -1,6 +1,6 @@
 import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain, parseNum, parseDim, unitStr } from '../math/num.js';
 import { toFloat } from '../math/vec.js';
-import { KINDS, BASES, DEFAULT_PARAMS, SCALARS, buildSolid, defaultSpec, specUnit } from '../geom/solids.js';
+import { KINDS, BASES, DEFAULT_PARAMS, SCALARS, buildSolid, defaultSpec, specUnit, parseNames, relabel } from '../geom/solids.js';
 import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.js';
 import { roundTools, roundToolGroups, evaluateRound, ANGLE_STEP } from '../geom/round.js';
 import { buildTrace } from '../geom/trace.js';
@@ -14,11 +14,12 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const COLORS = ['#c2410c', '#1d4ed8', '#15803d', '#9333ea', '#be123c', '#0e7490'];
 const STORE = 'facets.v1';
 const SNAP = 12; // точки на рёбрах и гранях привязываются к двенадцатым долям
-const SECTIONS = ['section', 'secPar', 'secPerp'];
+const SECTIONS = ['section', 'secPar', 'secPerp', 'secPar2'];
 
 const TOOL_GROUPS = [
   ['Точки', ['point', 'ratio', 'center']],
-  ['Сечения', ['section', 'secPar', 'secPerp']],
+  ['Прямые через точку', ['parLine', 'perpLineThru', 'normLine']],
+  ['Сечения', ['section', 'secPar', 'secPerp', 'secPar2']],
   ['Перпендикуляры', ['perpPlane', 'perpLine', 'commonPerp']],
   ['Сферы', ['sphereIn', 'sphereOut']],
   ['Измерения', ['dist', 'angleLL', 'angleLP', 'anglePP']],
@@ -349,6 +350,21 @@ function harmonize(spec) {
   return { ...spec, p };
 }
 
+/**
+ * При переключении «высота ↔ боковое ребро» новое поле заполняем значением,
+ * которое было у текущей фигуры, — пирамида на чертеже не меняется.
+ */
+function keepShape(mode) {
+  const p = { ...state.spec.p };
+  if (specError || !solid.info?.length) return p;
+  const u = solid.unit || '';
+  if (mode === 'edge') {
+    const [, l] = solid.info[0];
+    if (l.t) p.l = fmtNum(l, u); // точное число (не «неупрощаемый корень»)
+  } else p.h = fmtNum(solid.params.h, u);
+  return p;
+}
+
 /** Ползунок шагает по «хорошим» дробям, поэтому значения остаются точными */
 function sliderHtml(key, mode, raw, label, unit) {
   const v = approxOf(raw);
@@ -361,23 +377,34 @@ function renderFigure() {
   const s = state.spec, k = KINDS[s.kind];
   const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
   const unit = specUnit(s);
+  // подписи полей — с именами вершин, которые выбрал пользователь
+  const fresh = !specError && solid.spec === s && !k.round;
+  const rl = (t) => (fresh ? relabel(t, solid.defaultNames, solid.names) : t);
   let html = `<label class="field"><span>Фигура</span><select data-spec="kind">${Object.entries(KINDS).map(([v, x]) => opt(v, x.title, s.kind)).join('')}</select></label>`;
   if (k.bases) html += `<label class="field"><span>Основание</span><select data-spec="base">${k.bases.map((b) => opt(b, BASES[b].title, s.base)).join('')}</select></label>`;
   if (k.tilt) html += `<label class="field"><span>Боковые рёбра</span><select data-spec="tilt">${opt('right', 'перпендикулярны основанию (прямая)', s.tilt || 'right')}${opt('oblique', 'наклонные (наклонная призма)', s.tilt)}</select></label>`;
+  if (k.hmode) html += `<label class="field"><span>Высоту задаём</span><select data-spec="hmode">${opt('h', 'высотой', s.hmode || 'h')}${opt('edge', 'боковым ребром', s.hmode)}</select></label>`;
   if (k.apex) {
     const n = !specError && solid.spec === s ? solid.baseSize : { tri: 3, rtri: 3, tri3: 3, hex: 6 }[s.base] || 4;
     const centerName = s.base === 'rtri' ? 'в середину гипотенузы' : ['tri3', 'trap', 'poly'].includes(s.base) ? 'в центроид вершин основания' : 'в центр основания';
-    const who = s.kind === 'frustum' ? 'Вершина полной пирамиды проецируется' : 'Вершина S проецируется';
-    html += `<label class="field"><span>${who}</span><select data-spec="apex">${opt('center', centerName, s.apex)}${[...'ABCDEFGH'.slice(0, n)].map((c, i) => opt(String(i), `в вершину ${c}`, s.apex)).join('')}${opt('custom', 'в произвольную точку (x; y)', s.apex)}</select></label>`;
+    const who = s.kind === 'frustum' ? 'Вершина полной пирамиды проецируется' : rl('Вершина S проецируется');
+    const vn = fresh ? solid.names : [...'ABCDEFGH'];
+    html += `<label class="field"><span>${who}</span><select data-spec="apex">${opt('center', centerName, s.apex)}${vn.slice(0, n).map((c, i) => opt(String(i), `в вершину ${c}`, s.apex)).join('')}${opt('custom', 'в произвольную точку (x; y)', s.apex)}</select></label>`;
   }
   html += '<div class="params">' + k.params(s).map(([key, label, mode]) => {
     const raw = s.p[key] ?? DEFAULT_PARAMS[key];
     return mode === 'pts'
-      ? `<label class="field wide"><span>${esc(label)}</span><textarea data-param="${key}" rows="3" spellcheck="false">${esc(raw)}</textarea></label>`
-      : `<label class="field"><span>${esc(label)}</span><input data-param="${key}" value="${esc(raw)}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, raw, label, SCALARS.includes(key) ? null : unit)}</label>`;
+      ? `<label class="field wide"><span>${esc(rl(label))}</span><textarea data-param="${key}" rows="3" spellcheck="false">${esc(raw)}</textarea></label>`
+      : `<label class="field"><span>${esc(rl(label))}</span><input data-param="${key}" value="${esc(raw)}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, raw, label, SCALARS.includes(key) ? null : unit)}</label>`;
   }).join('') + '</div>';
   html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code> — или буквой: <code>a</code>, <code>2a</code>, <code>a/2</code>, <code>a√3</code>. С буквой все размеры должны быть пропорциональны ей, а ответы получатся в виде <code>a√3/2</code>, <code>a²√3/4</code>.</p>';
   if (unit) html += `<p class="fine">Ползунки меняют множитель при ${esc(unit)}.</p>`;
+  if (!k.round) {
+    const names = fresh ? solid.names : [];
+    const shown = names.every((x) => x.length === 1) ? names.join('') : names.join(' ');
+    html += `<label class="field"><span>Обозначения вершин</span><input data-names value="${esc(shown)}" spellcheck="false" autocomplete="off" aria-describedby="names-help"></label>`
+      + '<p class="fine" id="names-help">По порядку, например <code>ABCD</code> вместо <code>ABCS</code>; с индексами — через пробел: <code>A B C A1 B1 C1</code>. Пустое поле — обозначения по умолчанию.</p>';
+  }
   $('#figure').innerHTML = html;
 }
 
@@ -389,7 +416,7 @@ function valHtml(v, deg) {
 function renderFigureInfo() {
   $('#figure-info').innerHTML = specError
     ? `<p class="err">${esc(specError)}</p>`
-    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}</dd>${(solid.info || []).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${valHtml(v)}</dd>`).join('')}</dl>`
+    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}</dd>${(solid.info || []).map(([k, v, deg]) => `<dt>${esc(k)}</dt><dd>${valHtml(v, deg)}</dd>`).join('')}</dl>`
       + (solid.unit ? `<p class="fine">Размеры заданы буквой: считаем, что ${esc(solid.unit)} > 0 — произвольная положительная длина. Ответы точны при любом таком ${esc(solid.unit)}.</p>` : '')
       + (solid.baseCoords && (state.spec.apex === 'custom' || state.spec.tilt === 'oblique' || state.spec.base === 'poly')
         ? `<p class="fine coords">Координаты основания: ${esc(solid.baseCoords)}</p>` : '');
@@ -564,13 +591,37 @@ $('#figure').addEventListener('change', (e) => {
     const sl = $(`#figure [data-slide="${t.dataset.param}"]`), v = approxOf(t.value);
     if (sl && Number.isFinite(v)) { sl.max = Math.max(+sl.max, Math.ceil(v)); sl.min = Math.min(+sl.min, Math.floor(v)); sl.value = v; }
   }
+  if ('names' in t.dataset) {
+    let names;
+    try {
+      if (specError) throw new Error('сначала исправьте размеры фигуры');
+      names = parseNames(t.value);
+      if (names) {
+        const n = solid.defaultNames.length;
+        if (names.length !== n) throw new Error(`нужно ${n} имён — по одному на каждую вершину, а введено ${names.length}`);
+        const dup = names.find((x, i) => names.indexOf(x) !== i);
+        if (dup) throw new Error(`имя ${dup} повторяется`);
+        const taken = state.items.find((it) => it.kind === 'point' && names.includes(it.name));
+        if (taken) throw new Error(`имя ${taken.name} уже носит построенная точка — переименуйте её или выберите другое`);
+      }
+    } catch (err) {
+      toast(`Обозначения вершин: ${err.message}`);
+      t.value = solid.names.every((x) => x.length === 1) ? solid.names.join('') : solid.names.join(' ');
+      return;
+    }
+    commit();
+    state.spec = { ...state.spec, names: names || undefined };
+    refresh(true);
+    return;
+  }
   if (t.dataset.spec) {
     commit();
     const key = t.dataset.spec;
     if (key === 'kind') state.spec = { ...defaultSpec(t.value), p: state.spec.p };
+    else if (key === 'hmode') state.spec = { ...state.spec, hmode: t.value, p: keepShape(t.value) };
     else state.spec = { ...state.spec, [key]: t.value };
     if (key === 'kind' || key === 'base') { state.items = []; resetUi(); }
-    if (key === 'base') state.spec.apex = 'center';
+    if (key === 'base') { state.spec.apex = 'center'; delete state.spec.names; }
     state.spec = harmonize(state.spec);
     ui.tool = null; ui.picked = [];
     refresh(true);
@@ -580,7 +631,7 @@ $('#figure').addEventListener('change', (e) => {
     // если у основания стало другое число вершин, старые построения к новой фигуре не относятся
     const before = solid.verts.length;
     refresh();
-    if (!specError && solid.verts.length !== before) { state.items = []; resetUi(); refresh(true); }
+    if (!specError && solid.verts.length !== before) { state.items = []; delete state.spec.names; resetUi(); refresh(true); }
   }
 });
 

@@ -1,5 +1,5 @@
 // Фигуры: точные координаты вершин, грани (с внешней ориентацией), рёбра.
-import { N, ZERO, TWO, parseNum, parseDim, rootOf, sqrtNum, sumVals, fmtNum } from '../math/num.js';
+import { N, ZERO, TWO, parseNum, parseDim, rootOf, sqrtNum, sumVals, fmtNum, fmtVal } from '../math/num.js';
 import { add, sub, scale, dot, cross, det, len2 } from '../math/vec.js';
 import { buildRound } from './round.js';
 
@@ -31,7 +31,41 @@ export function specUnit(spec) {
   }
   return null;
 }
+const LETTERS = 'ABCDEFGH';
+
 // Третий элемент описания параметра: 'any' — число любого знака, 'pts' — список координат
+const SUBS = '₀₁₂₃₄₅₆₇₈₉';
+const NAME_RE = /\p{L}[\d₀-₉'′]*/gu;
+
+/** «ABCD», «A B C A1 B1 C1» → ['A', 'B', 'C', 'A₁', …]; пустая строка → null */
+export function parseNames(src) {
+  const str = String(src ?? '').trim();
+  if (!str) return null;
+  const rest = str.replace(NAME_RE, '').replace(/[\s,;]+/g, '');
+  if (rest) throw new Error(`не удалось разобрать «${rest}»: имя вершины — буква, за которой может идти индекс или штрих (A₁, B2, C')`);
+  return str.match(NAME_RE).map((t) => t.replace(/\d/g, (d) => SUBS[d]));
+}
+
+/** Свои имена вершин из spec.names, если они подходят к фигуре, иначе стандартные */
+function applyNames(spec, defaults) {
+  const c = spec.names;
+  return Array.isArray(c) && c.length === defaults.length && new Set(c).size === c.length ? [...c] : defaults;
+}
+
+/** Подставляет свои имена вершин в подпись вида «Боковое ребро SA», «Ребро AA₁» */
+export function relabel(text, defaults, names) {
+  if (!defaults || !names || defaults === names) return text;
+  const map = new Map(defaults.map((d, i) => [d, names[i]]));
+  return text.replace(/[A-HS]₁?/g, (m) => map.get(m) ?? m);
+}
+
+// Боковое ребро пирамиды, по которому задаётся её высота: SA, а если S проецируется в A — SB
+const lateralIndex = (s) => (s.apex === '0' ? 1 : 0);
+// Все боковые рёбра равны, когда вершина проецируется в центр описанной окружности основания
+const EQUAL_LATERAL = ['tri', 'sq', 'hex', 'rect', 'rtri'];
+function lateralLabel(s) {
+  return s.apex === 'center' && EQUAL_LATERAL.includes(s.base) ? 'Боковое ребро' : `Боковое ребро S${LETTERS[lateralIndex(s)]}`;
+}
 const apexParams = (s) => (s.apex === 'custom' ? [['sx', 'Проекция вершины: x', 'any'], ['sy', 'Проекция вершины: y', 'any']] : []);
 
 export const KINDS = {
@@ -41,7 +75,10 @@ export const KINDS = {
     title: 'Призма', bases: Object.keys(BASES), tilt: true,
     params: (s) => [...BASES[s.base].params, ['h', 'Высота'], ...(s.tilt === 'oblique' ? [['dx', 'Сдвиг верхнего основания: x', 'any'], ['dy', 'Сдвиг верхнего основания: y', 'any']] : [])],
   },
-  pyramid: { title: 'Пирамида', bases: Object.keys(BASES), apex: true, params: (s) => [...BASES[s.base].params, ['h', 'Высота'], ...apexParams(s)] },
+  pyramid: {
+    title: 'Пирамида', bases: Object.keys(BASES), apex: true, hmode: true,
+    params: (s) => [...BASES[s.base].params, s.hmode === 'edge' ? ['l', lateralLabel(s)] : ['h', 'Высота'], ...apexParams(s)],
+  },
   tetra: { title: 'Правильный тетраэдр', params: () => [['a', 'Ребро']] },
   frustum: {
     title: 'Усечённая пирамида', bases: Object.keys(BASES), apex: true,
@@ -59,14 +96,12 @@ export const KINDS = {
   ball: { title: 'Шар', round: true, params: () => [['r', 'Радиус']] },
 };
 
-export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1', m: '2', k: '1/2', sx: '1', sy: '1', r: '3', r2: '1', dx: '1', dy: '1', pts: '0 0; 4 0; 5 3; 1 4' };
+export const DEFAULT_PARAMS = { a: '2', b: '3', c: '4', h: '3', d1: '8', d2: '6', t: '1', m: '2', k: '1/2', sx: '1', sy: '1', l: '4', r: '3', r2: '1', dx: '1', dy: '1', pts: '0 0; 4 0; 5 3; 1 4' };
 
 export function defaultSpec(kind) {
   const k = KINDS[kind];
-  return { kind, base: k.bases ? (kind === 'prism' ? 'tri' : 'sq') : null, apex: 'center', tilt: 'right', p: { ...DEFAULT_PARAMS } };
+  return { kind, base: k.bases ? (kind === 'prism' ? 'tri' : 'sq') : null, apex: 'center', tilt: 'right', hmode: 'h', p: { ...DEFAULT_PARAMS } };
 }
-
-const LETTERS = 'ABCDEFGH';
 
 /** «0 0; 4 0; 5 3» → точные координаты вершин выпуклого многоугольника */
 function parsePolygon(src, dims) {
@@ -175,7 +210,7 @@ export function buildSolid(spec) {
     return spec.apex === 'center' || !(+spec.apex < pts.length) ? center : pts[+spec.apex];
   };
 
-  let names = [], verts = [], faces = [];
+  let names = [], verts = [], faces = [], info = [];
   const prismLike = (base, top, h) => {
     const n = base.length;
     names = [...LETTERS.slice(0, n), ...[...LETTERS.slice(0, n)].map((c) => c + '₁')];
@@ -207,6 +242,24 @@ export function buildSolid(spec) {
       const { pts } = baseInfo;
       const n = pts.length;
       const foot = apexFoot(baseInfo);
+      const dn = [...LETTERS.slice(0, n), 'S'], nm = applyNames(spec, dn);
+      if (spec.hmode === 'edge') {
+        // h² = l² − (расстояние от проекции вершины до конца ребра)²
+        const i = lateralIndex(spec), A = pts[i], label = relabel(lateralLabel(spec), dn, nm);
+        const r2 = A[0].sub(foot[0]).sq().add(A[1].sub(foot[1]).sq());
+        const h2 = p.l.sq().sub(r2);
+        const ru = fmtVal(rootOf(r2), unit || '');
+        if (h2.sign() <= 0) throw new Error(`${label}: должно быть больше ${ru} — расстояния от проекции вершины ${nm[n]} до вершины ${nm[i]}. Иначе высота пирамиды не положительна.`);
+        const h = sqrtNum(h2);
+        if (!h) throw new Error(`${label}: при таком ребре высота выражается вложенным радикалом — такая пирамида не поддерживается.`);
+        p.h = h;
+        info = [['Высота', h, 1]];
+      } else {
+        const i = lateralIndex(spec);
+        const A = pts[i];
+        const l2 = A[0].sub(foot[0]).sq().add(A[1].sub(foot[1]).sq()).add(p.h.sq());
+        info = [[relabel(lateralLabel(spec), dn, nm), rootOf(l2), 1]];
+      }
       names = [...LETTERS.slice(0, n), 'S'];
       verts = [...pts.map(([x, y]) => [x, y, ZERO]), [foot[0], foot[1], p.h]];
       const idx = [...Array(n).keys()];
@@ -225,6 +278,8 @@ export function buildSolid(spec) {
     }
   }
 
+  const defaultNames = names;
+  names = applyNames(spec, names);
   const faceNames = faces.map((f) => f.map((i) => names[i]).join(''));
 
   // Внешняя ориентация граней
@@ -246,12 +301,12 @@ export function buildSolid(spec) {
 
   const facePts = faces.map((f) => f.map((i) => verts[i]));
   return {
-    spec, names, verts, faces, edges, planes, centroid, params: p,
+    spec, names, defaultNames, verts, faces, edges, planes, centroid, params: p,
     /** буква-масштаб или null; координаты, длины, площади и объёмы ниже — коэффициенты при её степенях */
     unit,
     baseSize: baseInfo ? baseInfo.pts.length : 0,
-    baseCoords: baseInfo ? baseInfo.pts.map(([x, y], i) => `${LETTERS[i]}(${fmtNum(x, unit || '')}; ${fmtNum(y, unit || '')})`).join(', ') : '',
-    faceNames,
+    baseCoords: baseInfo ? baseInfo.pts.map(([x, y], i) => `${names[i]}(${fmtNum(x, unit || '')}; ${fmtNum(y, unit || '')})`).join(', ') : '',
+    faceNames, info,
     volume: facesVolume(facePts, verts[0]),
     surface: sumVals(facePts.map(polygonArea)),
   };

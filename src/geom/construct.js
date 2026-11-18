@@ -22,11 +22,15 @@ export const TOOLS = {
   anglePP: { title: 'Угол между плоскостями', slots: ['1-я плоскость: точка 1', '1-я плоскость: точка 2', '1-я плоскость: точка 3', '2-я плоскость: точка 1', '2-я плоскость: точка 2', '2-я плоскость: точка 3'] },
   secPar: { title: 'Сечение ∥ плоскости', slots: ['точка, через которую пройдёт сечение', '1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
   secPerp: { title: 'Сечение ⟂ прямой', slots: ['точка, через которую пройдёт сечение', '1-я точка прямой', '2-я точка прямой'] },
+  secPar2: { title: 'Сечение ∥ двум прямым', slots: ['точка, через которую пройдёт сечение', '1-я прямая: первая точка', '1-я прямая: вторая точка', '2-я прямая: первая точка', '2-я прямая: вторая точка'] },
+  parLine: { title: 'Прямая ∥ прямой', slots: ['точка, через которую проводим прямую', '1-я точка данной прямой', '2-я точка данной прямой'] },
+  perpLineThru: { title: 'Прямая ⟂ прямой', slots: ['точка, через которую проводим прямую', '1-я точка данной прямой', '2-я точка данной прямой'] },
+  normLine: { title: 'Прямая ⟂ плоскости', slots: ['точка, через которую проводим прямую', '1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
 };
 
 // С какого слота начинается тройка точек плоскости: вместо трёх точек
 // можно одним кликом выбрать грань или уже построенное сечение.
-const PLANE_AT = { perpPlane: [1], angleLP: [2], anglePP: [0, 3], secPar: [1] };
+const PLANE_AT = { perpPlane: [1], angleLP: [2], anglePP: [0, 3], secPar: [1], normLine: [1] };
 for (const [k, v] of Object.entries(PLANE_AT)) TOOLS[k].planeAt = v;
 
 const SUB = '₀₁₂₃₄₅₆₇₈₉';
@@ -125,6 +129,57 @@ function lineSegs(l, t, foot) {
   return segs;
 }
 const outside = (t) => t.sign() < 0 || t.cmp(ONE) > 0;
+
+/** Пересечение прямой P + t·u с фигурой: отрезок [t₀; t₁] или null, если прямая проходит мимо или только касается */
+function chord(S, P, u) {
+  let lo = null, hi = null;
+  for (const pl of S.planes) {
+    // внутренность фигуры: n·x ≤ d  ⇒  t·(n·u) ≤ d − n·P
+    const a = dot(pl.n, u), b = pl.d.sub(dot(pl.n, P));
+    if (a.isZero()) { if (b.sign() < 0) return null; continue; }
+    const t = b.div(a);
+    if (a.sign() > 0) { if (!hi || t.cmp(hi) < 0) hi = t; } else if (!lo || t.cmp(lo) > 0) lo = t;
+  }
+  return lo && hi && lo.cmp(hi) < 0 ? [lo, hi] : null;
+}
+
+/** Где на поверхности фигуры лежит точка: «вершина A», «ребро AB», «грань ABC» */
+function whereOnSurface(S, pos) {
+  const on = S.planes.map((pl, i) => (dot(pl.n, pos).eq(pl.d) ? i : -1)).filter((i) => i >= 0);
+  const vi = S.verts.findIndex((v) => eqVec(v, pos));
+  if (vi >= 0) return `вершина ${S.names[vi]}`;
+  if (on.length >= 2) {
+    const common = S.faces[on[0]].filter((i) => S.faces[on[1]].includes(i)).sort((x, y) => x - y);
+    if (common.length === 2) return `ребро ${S.names[common[0]]}${S.names[common[1]]}`;
+  }
+  return on.length ? `грань ${S.faceNames[on[0]]}` : '';
+}
+
+/**
+ * Прямая через P с направлением u: отмечаем точки, где она входит в фигуру и выходит из неё,
+ * чтобы прямую можно было использовать в следующих построениях (две точки задают прямую).
+ */
+function lineThrough(it, ctx, P, u, title) {
+  const S = ctx.solid;
+  const ch = chord(S, P.pos, u);
+  const rows = [], notes = [], segs = [];
+  if (ch) {
+    const X = ctx.reg(it, 'X', add(P.pos, scale(u, ch[0])), POINT_POOL);
+    const Y = ctx.reg(it, 'Y', add(P.pos, scale(u, ch[1])), POINT_POOL);
+    segs.push({ a: X.pos, b: Y.pos, cls: 'main' });
+    if (ch[0].sign() > 0) segs.push({ a: P.pos, b: X.pos, cls: 'ext' });
+    if (ch[1].sign() < 0) segs.push({ a: Y.pos, b: P.pos, cls: 'ext' });
+    const at = (Q) => { const w = whereOnSurface(S, Q.pos); return !w ? Q.name : w === `вершина ${Q.name}` ? w : `${Q.name} (${w})`; };
+    rows.push(text('Пересекает поверхность', `${at(X)} и ${at(Y)}`), row(S, `Длина ${X.name}${Y.name}`, rootOf(len2(sub(Y.pos, X.pos))), 1));
+    notes.push(`Прямую ${X.name}${Y.name} можно выбирать в других построениях — кликните по точкам ${X.name} и ${Y.name}.`);
+    if (ch[0].sign() > 0 || ch[1].sign() < 0) notes.push(`Точка ${P.name} лежит вне фигуры, пунктиром показано продолжение прямой до неё.`);
+  } else {
+    const Q = ctx.reg(it, 'Q', add(P.pos, u), POINT_POOL);
+    segs.push({ a: P.pos, b: Q.pos, cls: 'main' });
+    notes.push(`Прямая не проходит внутри фигуры (самое большее касается её поверхности). Для дальнейших построений на ней отмечена точка ${Q.name}: прямая — ${P.name}${Q.name}.`);
+  }
+  return { title, rows, notes, draw: { segs } };
+}
 
 const NGON = { 3: 'треугольник', 4: 'четырёхугольник', 5: 'пятиугольник', 6: 'шестиугольник', 7: 'семиугольник', 8: 'восьмиугольник' };
 
@@ -228,6 +283,73 @@ export const EVAL = {
   secPerp(it, ctx) {
     const P = ctx.get(it.refs[0]), l = lineOf(ctx, it.refs.slice(1));
     return sectionOf(it, ctx, { n: l.u, d: dot(l.u, P.pos), pts: [P], label: 'Плоскость сечения', title: `Сечение через ${P.name} ⟂ ${l.name}` });
+  },
+
+  secPar2(it, ctx) {
+    const P = ctx.get(it.refs[0]), l1 = lineOf(ctx, it.refs.slice(1, 3)), l2 = lineOf(ctx, it.refs.slice(3));
+    const title = `Сечение через ${P.name} ∥ ${l1.name} и ${l2.name}`;
+    const n = cross(l1.u, l2.u);
+    if (isZeroVec(n)) {
+      return { title, error: `Прямые ${l1.name} и ${l2.name} параллельны${isZeroVec(cross(sub(l2.a.pos, l1.a.pos), l1.u)) ? ' (совпадают)' : ''}: плоскостей через ${P.name}, параллельных обеим, бесконечно много — годится любая плоскость, содержащая прямую через ${P.name} параллельно ${l1.name}. Чтобы сечение было единственным, прямые должны пересекаться или скрещиваться.` };
+    }
+    const res = sectionOf(it, ctx, { n, d: dot(n, P.pos), pts: [P], label: 'Плоскость сечения', title });
+    const onLine = (l) => isZeroVec(cross(sub(P.pos, l.a.pos), l.u));
+    const extra = [];
+    const on1 = onLine(l1), on2 = onLine(l2);
+    if (on1 && on2) extra.push(`Точка ${P.name} лежит на обеих прямых: сечение — это плоскость, проходящая через ${l1.name} и ${l2.name}.`);
+    else if (on1 || on2) {
+      const [a, b] = on1 ? [l1, l2] : [l2, l1];
+      extra.push(`Точка ${P.name} лежит на прямой ${a.name}, поэтому плоскость содержит ${a.name}: это сечение через ${a.name} параллельно ${b.name}.`);
+    } else if (!det(sub(l2.a.pos, l1.a.pos), l1.u, l2.u).isZero()) extra.push(`Прямые ${l1.name} и ${l2.name} скрещиваются; плоскость сечения параллельна обеим.`);
+    else extra.push(`Прямые ${l1.name} и ${l2.name} пересекаются; плоскость сечения параллельна их плоскости.`);
+    res.notes = [...extra, ...(res.notes || [])];
+    return res;
+  },
+
+  parLine(it, ctx) {
+    const P = ctx.get(it.refs[0]), l = lineOf(ctx, it.refs.slice(1));
+    const title = `Прямая через ${P.name} ∥ ${l.name}`;
+    if (isZeroVec(cross(sub(P.pos, l.a.pos), l.u))) return { title, error: `Точка ${P.name} лежит на прямой ${l.name}: параллельная прямая через неё совпадает с ${l.name}.` };
+    return lineThrough(it, ctx, P, l.u, title);
+  },
+
+  perpLineThru(it, ctx) {
+    const P = ctx.get(it.refs[0]), l = lineOf(ctx, it.refs.slice(1));
+    const title = `Прямая через ${P.name} ⟂ ${l.name}`;
+    const t = dot(sub(P.pos, l.a.pos), l.u).div(len2(l.u));
+    const foot = add(l.a.pos, scale(l.u, t));
+    if (eqVec(foot, P.pos)) {
+      return { title, error: `Точка ${P.name} лежит на прямой ${l.name}: перпендикуляров к ${l.name} через неё бесконечно много (они заполняют плоскость). Выберите точку вне прямой или задайте плоскость перпендикуляра инструментом «Сечение ⟂ прямой».` };
+    }
+    const H = ctx.reg(it, 'H', foot, 'H');
+    const res = lineThrough(it, ctx, P, sub(foot, P.pos), title);
+    const other = eqVec(l.a.pos, foot) ? l.b.pos : l.a.pos;
+    res.draw.segs.push(...lineSegs(l, t, foot));
+    res.draw.marks = [{ at: foot, u: sub(P.pos, foot), v: sub(other, foot) }];
+    res.rows.unshift(text('Пересекает прямую ' + l.name, `в точке ${H.name}`), row(ctx.solid, `Расстояние ${P.name}${H.name}`, rootOf(len2(sub(P.pos, foot))), 1));
+    if (outside(t)) res.notes.unshift(`Точка ${H.name} лежит на продолжении отрезка ${l.name}.`);
+    return res;
+  },
+
+  normLine(it, ctx) {
+    const P = ctx.get(it.refs[0]), pl = planeOf(ctx, it.refs.slice(1));
+    const title = `Прямая через ${P.name} ⟂ ${pl.name}`;
+    const k = dot(pl.n, P.pos).sub(pl.d), nn = len2(pl.n);
+    const foot = sub(P.pos, scale(pl.n, k.div(nn)));
+    if (!k.isZero()) ctx.reg(it, 'H', foot, 'H');
+    // направление — PH, а если P в плоскости — нормаль, делённая на наибольшую по модулю координату (чтобы длина была порядка 1)
+    const abs = (x) => (x.sign() < 0 ? x.neg() : x);
+    const big = pl.n.reduce((m, x) => (abs(x).cmp(m) > 0 ? abs(x) : m), ZERO);
+    const res = lineThrough(it, ctx, P, k.isZero() ? scale(pl.n, big.inv()) : sub(foot, P.pos), title);
+    res.draw.polys = [{ pts: pl.pts.map((p) => p.pos), cls: 'ghost' }];
+    const anchor = pl.pts.find((p) => !eqVec(p.pos, foot)).pos;
+    res.draw.marks = [{ at: foot, u: pl.n, v: sub(anchor, foot) }];
+    if (k.isZero()) res.rows.unshift(text('Пересекает плоскость', `в точке ${P.name}`));
+    else {
+      const H = ctx.points.get(`${it.id}:H`);
+      res.rows.unshift(text('Пересекает плоскость', `в точке ${H.name}`), row(ctx.solid, `Расстояние ${P.name}${H.name}`, rootOf(k.sq().div(nn)), 1));
+    }
+    return res;
   },
 
   sectionBody(it, ctx, pl) {

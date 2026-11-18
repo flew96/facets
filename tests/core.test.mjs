@@ -357,3 +357,66 @@ test('буквенные размеры: нельзя смешивать с чи
   assert.equal(specUnit(S.spec), 'a');
   assert.equal(specUnit(solid('cube').spec), null);
 });
+
+test('пирамида по боковому ребру', () => {
+  const S = solid('pyramid', { a: '6', l: '5' }, { base: 'tri', hmode: 'edge' });
+  assert.equal(fmtNum(S.verts.at(-1)[2]), '√13'); // h² = 25 − (2√3)²
+  assert.equal(S.info[0][0], 'Высота');
+  // вершина проецируется в A — ребро берётся SB
+  const T = solid('pyramid', { a: '2', l: '√13' }, { base: 'sq', apex: '0', hmode: 'edge' });
+  assert.equal(fmtNum(T.verts.at(-1)[2]), '3');
+  // в режиме высоты показываем длину бокового ребра
+  const U = solid('pyramid', { a: '6', h: '5' }, { base: 'tri' });
+  assert.deepEqual([U.info[0][0], fmtVal(U.info[0][1])], ['Боковое ребро', '√37']);
+  assert.throws(() => solid('pyramid', { a: '6', l: '2' }, { base: 'tri', hmode: 'edge' }), /больше 2√3/);
+  const L = solid('pyramid', { a: '2a', l: '3a' }, { base: 'sq', hmode: 'edge' });
+  assert.equal(L.unit, 'a');
+  assert.equal(fmtNum(L.verts.at(-1)[2]), '√7');
+});
+
+test('прямые через точку и сечение ∥ двум прямым', () => {
+  const S = solid('cube');
+  const M = mid(S, 'm', 'M', 'A', 'A₁');
+  const r = run(S, [M,
+    { id: 'p', kind: 'parLine', refs: ['m', v(S, 'B'), v(S, 'C')] },
+    { id: 'q', kind: 'perpLineThru', refs: [v(S, 'A₁'), v(S, 'B'), v(S, 'C')] },
+    { id: 'n', kind: 'normLine', refs: [v(S, 'A₁'), v(S, 'A'), v(S, 'B'), v(S, 'C')] },
+    { id: 'z', kind: 'parLine', refs: ['m', v(S, 'A'), v(S, 'A₁')] },
+    { id: 's', kind: 'secPar2', refs: ['m', v(S, 'A'), v(S, 'B'), v(S, 'A'), v(S, 'D')] },
+    { id: 'e', kind: 'secPar2', refs: ['m', v(S, 'A'), v(S, 'B'), v(S, 'D'), v(S, 'C')] },
+  ]);
+  assert.equal(rows(r('p'))['Длина MK'], '2');
+  assert.match(rows(r('p'))['Пересекает поверхность'], /ребро DD₁/);
+  assert.equal(rows(r('q'))['Расстояние A₁B'], '2√2');
+  assert.equal(rows(r('n'))['Расстояние A₁A'], '2');
+  assert.match(r('z').error, /совпадает/);
+  assert.equal(rows(r('s'))['Площадь'], '4');
+  assert.equal(rows(r('s'))['V₁ : V₂'], '1 : 1');
+  assert.match(r('e').error, /параллельны/);
+});
+
+test('перпендикуляр к плоскости мимо фигуры — вспомогательная точка рядом', () => {
+  const S = solid('cube');
+  // плоскость (ACC₁) проходит через A, перпендикуляр к ней в точке A лишь касается куба
+  const ctx = evaluate(S, [{ id: 'n', kind: 'normLine', refs: [v(S, 'A'), v(S, 'A'), v(S, 'C'), v(S, 'C₁')] }]);
+  const q = ctx.points.get('n:Q');
+  assert.ok(q, 'нет точки Q');
+  const d = q.pos.map((x, i) => x.sub(S.verts[0][i]).toNumber());
+  assert.ok(Math.hypot(...d) <= 2, `Q слишком далеко: ${d}`);
+});
+
+test('свои обозначения вершин', async () => {
+  const { parseNames } = await import('../src/geom/solids.js');
+  assert.deepEqual(parseNames('A B C A1 B1 C1'), ['A', 'B', 'C', 'A₁', 'B₁', 'C₁']);
+  assert.deepEqual(parseNames('ABCD'), ['A', 'B', 'C', 'D']);
+  assert.equal(parseNames('  '), null);
+  assert.throws(() => parseNames('AB-C'), /разобрать/);
+  const S = solid('pyramid', { a: '6', l: '5' }, { base: 'tri', hmode: 'edge', names: ['A', 'B', 'C', 'D'] });
+  assert.deepEqual(S.names, ['A', 'B', 'C', 'D']);
+  assert.ok(S.faceNames.includes('ABD') || S.faceNames.includes('BAD'));
+  assert.throws(() => solid('pyramid', { a: '6', l: '2' }, { base: 'tri', hmode: 'edge', names: ['K', 'L', 'M', 'P'] }), /вершины P до вершины K/);
+  // имена не к той фигуре (другое число вершин) — остаются стандартные
+  assert.deepEqual(solid('pyramid', {}, { base: 'sq', names: ['A', 'B', 'C', 'D'] }).names, ['A', 'B', 'C', 'D', 'S']);
+  const r = run(S, [{ id: 's', kind: 'dist', refs: ['v3', 'v0'] }]);
+  assert.equal(r('s').title, 'Отрезок DA');
+});

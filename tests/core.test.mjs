@@ -481,3 +481,22 @@ test('задача: BH ⟂ (SAD), HA = √2, HC = 4 — объём 9√14/4', as
   assert.equal(fmtVal(S.volume), '9√14/4');
   assert.equal(rows(run(S, ex.state.items)('i4'))['Угол φ'], '90°');
 });
+
+test('задача: SABC, AB = 30, SA = 28, плоскость через MN ⟂ основанию', async () => {
+  const { EXAMPLES } = await import('../src/ui/examples.js');
+  const ex = EXAMPLES.find((e) => e.title.startsWith('Пирамида SABC: AB = 30'));
+  const S = buildSolid(ex.state.spec);
+  assert.equal(fmtNum(S.verts[3][2]), '22');
+  const r = run(S, ex.state.items);
+  assert.equal(rows(r('i5'))['Площадь'], '220');
+  assert.equal(rows(r('i6'))['CP : PE'], '5 : 1');
+  assert.equal(rows(r('i7'))['Объём'], '2750√3/3');
+  // прямая, параллельная плоскости, — понятная ошибка; объём пирамиды по грани
+  const C = solid('cube');
+  const r2 = run(C, [
+    { id: 'a', kind: 'linePlane', refs: [v(C, 'A₁'), v(C, 'B₁'), v(C, 'A'), v(C, 'B'), v(C, 'C')] },
+    { id: 'b', kind: 'pyrVol', refs: [v(C, 'A₁'), v(C, 'A'), v(C, 'B'), v(C, 'C')] },
+  ]);
+  assert.match(r2('a').error, /параллельна/);
+  assert.equal(rows(r2('b'))['Объём'], '8/3'); // основание — вся грань ABCD
+});

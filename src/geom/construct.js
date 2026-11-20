@@ -25,12 +25,14 @@ export const TOOLS = {
   secPar2: { title: 'Сечение ∥ двум прямым', slots: ['точка, через которую пройдёт сечение', '1-я прямая: первая точка', '1-я прямая: вторая точка', '2-я прямая: первая точка', '2-я прямая: вторая точка'] },
   parLine: { title: 'Прямая ∥ прямой', slots: ['точка, через которую проводим прямую', '1-я точка данной прямой', '2-я точка данной прямой'] },
   perpLineThru: { title: 'Прямая ⟂ прямой', slots: ['точка, через которую проводим прямую', '1-я точка данной прямой', '2-я точка данной прямой'] },
+  linePlane: { title: 'Пересечение прямой и плоскости', slots: ['1-я точка прямой', '2-я точка прямой', '1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
+  pyrVol: { title: 'Объём пирамиды', slots: ['вершина пирамиды', '1-я точка основания', '2-я точка основания', '3-я точка основания'] },
   normLine: { title: 'Прямая ⟂ плоскости', slots: ['точка, через которую проводим прямую', '1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
 };
 
 // С какого слота начинается тройка точек плоскости: вместо трёх точек
 // можно одним кликом выбрать грань или уже построенное сечение.
-const PLANE_AT = { perpPlane: [1], angleLP: [2], anglePP: [0, 3], secPar: [1], normLine: [1] };
+const PLANE_AT = { perpPlane: [1], angleLP: [2], anglePP: [0, 3], secPar: [1], normLine: [1], linePlane: [2], pyrVol: [1] };
 for (const [k, v] of Object.entries(PLANE_AT)) TOOLS[k].planeAt = v;
 
 const SUB = '₀₁₂₃₄₅₆₇₈₉';
@@ -454,6 +456,58 @@ export const EVAL = {
       title, draw,
       rows: [row(ctx.solid, `Расстояние ${P.name}${H.name}`, rootOf(len2(sub(P.pos, foot))), 1), text('Основание', `точка ${H.name}`)],
       notes: outside(t) ? [`Основание ${H.name} лежит на продолжении отрезка ${l.name}.`] : [],
+    };
+  },
+
+  linePlane(it, ctx) {
+    const l = lineOf(ctx, it.refs.slice(0, 2)), pl = planeOf(ctx, it.refs.slice(2));
+    const title = `Пересечение ${l.name} и ${pl.name}`;
+    const draw = { polys: [{ pts: pl.pts.map((p) => p.pos), cls: 'ghost' }], segs: [{ a: l.a.pos, b: l.b.pos, cls: 'aux' }] };
+    const nu = dot(pl.n, l.u), k = pl.d.sub(dot(pl.n, l.a.pos));
+    if (nu.isZero()) return { title, draw, error: k.isZero() ? `Прямая ${l.name} лежит в плоскости ${pl.name}: общих точек бесконечно много.` : `Прямая ${l.name} параллельна плоскости ${pl.name} и не пересекает её.` };
+    const t = k.div(nu), pos = add(l.a.pos, scale(l.u, t));
+    const X = ctx.reg(it, 'X', pos, POINT_POOL);
+    draw.segs = lineSegs(l, t, pos);
+    const rows = [text('Точка пересечения', X.name)];
+    const notes = [];
+    if (t.sign() > 0 && t.cmp(ONE) < 0) {
+      // делит отрезок AB в отношении AX : XB = t : (1 − t)
+      const r = t.div(ONE.sub(t));
+      const v = r.isRational() ? `${r.rational()[0]} : ${r.rational()[1]}` : fmtNum(r);
+      rows.push(text(`${l.a.name}${X.name} : ${X.name}${l.b.name}`, v));
+    } else if (outside(t)) notes.push(`Точка ${X.name} лежит на продолжении отрезка ${l.name}.`);
+    rows.push(row(ctx.solid, `${l.a.name}${X.name}`, rootOf(len2(sub(pos, l.a.pos))), 1));
+    return { title, rows, notes, draw };
+  },
+
+  pyrVol(it, ctx) {
+    const P = ctx.get(it.refs[0]), base = it.refs.slice(1).map((r) => ctx.get(r));
+    // основание — готовое сечение или грань, если плоскость выбрана кликом по ним, иначе треугольник из трёх точек
+    const owner = ownerOf(it.refs[1]);
+    const sec = owner ? ctx.results.get(owner)?.section : null;
+    const S = ctx.solid;
+    let pts = base.map((p) => p.pos), names = base.map((p) => p.name);
+    if (sec && it.refs.slice(1).every((r) => ownerOf(r) === owner)) { pts = sec.pts; names = sec.names; }
+    else {
+      const fi = S.faces.findIndex((f) => it.refs.slice(1).every((r) => r[0] === 'v' && f.includes(+r.slice(1))));
+      if (fi >= 0) { pts = S.faces[fi].map((i) => S.verts[i]); names = S.faces[fi].map((i) => S.names[i]); }
+    }
+    let nrm = [ZERO, ZERO, ZERO];
+    for (let i = 1; i + 1 < pts.length; i++) nrm = add(nrm, cross(sub(pts[i], pts[0]), sub(pts[i + 1], pts[0])));
+    const title = `Пирамида ${P.name}${names.join('')}`;
+    if (isZeroVec(nrm)) return { title, error: 'Точки основания лежат на одной прямой — основания нет.' };
+    const k = dot(nrm, sub(P.pos, pts[0])), kk = k.sign() < 0 ? k.neg() : k;
+    if (k.isZero()) return { title, error: `Точка ${P.name} лежит в плоскости основания — пирамида вырождается.` };
+    const nn = len2(nrm);
+    return {
+      title,
+      rows: [
+        row(S, 'Объём', kk.div(N(6)), 3),
+        row(S, 'Площадь основания', rootOf(nn.div(N(4))), 2),
+        row(S, 'Высота', rootOf(k.sq().div(nn)), 1),
+      ],
+      notes: ['V = ⅓·S·h, где h — расстояние от вершины до плоскости основания.'],
+      draw: { polys: [{ pts, cls: 'ghost' }], segs: pts.map((q) => ({ a: P.pos, b: q, cls: 'main' })) },
     };
   },
 

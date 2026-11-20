@@ -103,6 +103,20 @@ export const EXAMPLES = [
     },
   },
   {
+    title: 'Пирамида SABC: AB = 30, SA = 28; плоскость через MN ⟂ основанию',
+    state: {
+      spec: spec('pyramid', { base: 'tri', hmode: 'edge' }, { a: '30', l: '28' }), seq: 20,
+      items: [
+        ratio('i1', 'M', 3, 0), ratio('i2', 'N', 3, 1), ratio('i3', 'E', 0, 1),
+        // α ⟂ (ABC) и содержит MN: третья точка — проекция M на основание
+        { id: 'i4', kind: 'perpPlane', color: 0, refs: ['i1', ...v(0, 1, 2)] },
+        { id: 'i5', kind: 'section', color: 1, refs: ['i1', 'i2', 'i4:H'] },
+        { id: 'i6', kind: 'linePlane', color: 2, refs: ['v2', 'i3', 'i5:k0', 'i5:k1', 'i5:k2'] },
+        { id: 'i7', kind: 'pyrVol', color: 3, refs: ['v2', 'i5:k0', 'i5:k1', 'i5:k2'] },
+      ],
+    },
+  },
+  {
     title: 'Куб: сечение, параллельное диагональной плоскости',
     state: {
       spec: spec('cube'), seq: 10,

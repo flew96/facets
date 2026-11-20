@@ -18,12 +18,12 @@ const SNAP = 12; // точки на рёбрах и гранях привязы�
 const SECTIONS = ['section', 'secPar', 'secPerp', 'secPar2'];
 
 const TOOL_GROUPS = [
-  ['Точки', ['point', 'ratio', 'center']],
+  ['Точки', ['point', 'ratio', 'center', 'linePlane']],
   ['Прямые через точку', ['parLine', 'perpLineThru', 'normLine']],
   ['Сечения', ['section', 'secPar', 'secPerp', 'secPar2']],
   ['Перпендикуляры', ['perpPlane', 'perpLine', 'commonPerp']],
   ['Сферы', ['sphereIn', 'sphereOut']],
-  ['Измерения', ['dist', 'angleLL', 'angleLP', 'anglePP']],
+  ['Измерения', ['dist', 'angleLL', 'angleLP', 'anglePP', 'pyrVol']],
 ];
 
 // Тела вращения — отдельная ветка: свои инструменты и свой пересчёт построений

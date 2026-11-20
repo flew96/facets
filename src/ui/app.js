@@ -5,7 +5,7 @@ import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.j
 import { roundTools, roundToolGroups, evaluateRound, ANGLE_STEP } from '../geom/round.js';
 import { buildTrace } from '../geom/trace.js';
 import { explain } from '../geom/explain.js';
-import { fittable, fitScale, fitParam, fitParams } from '../geom/fit.js';
+import { fittable, solveConds, buildSpec, unknownChoices, relevantItems, condsStatus, UNIT } from '../geom/fit.js';
 import { View, HOME } from './view.js';
 import { netSvg } from './net.js';
 import { EXAMPLES } from './examples.js';
@@ -31,7 +31,7 @@ const toolsNow = () => (solid?.round ? roundTools(solid.shape) : TOOLS);
 const groupsNow = () => (solid.round ? roundToolGroups(solid.shape) : TOOL_GROUPS);
 const evalNow = () => (solid.round ? evaluateRound : evaluate)(solid, state.items);
 
-const freshState = (ex) => ({ opts: { alpha: 0.1, hidden: true, labels: true }, ...structuredClone(ex.state) });
+const freshState = (ex) => ({ opts: { alpha: 0.1, hidden: true, labels: true }, conds: [], ...structuredClone(ex.state) });
 
 let state = fromHash() || load() || freshState(EXAMPLES[0]);
 let solid = null, specError = null, ctx = null;
@@ -40,7 +40,7 @@ const history = [];
 const traces = new Map();
 const view = new View($('#view'));
 
-function valid(s) { return s && s.spec && KINDS[s.spec.kind] && Array.isArray(s.items) ? { opts: { alpha: 0.1, hidden: true, labels: true }, seq: 1000, ...s } : null; }
+function valid(s) { return s && s.spec && KINDS[s.spec.kind] && Array.isArray(s.items) ? { opts: { alpha: 0.1, hidden: true, labels: true }, seq: 1000, ...s, conds: Array.isArray(s.conds) ? s.conds : [] } : null; }
 function load() { try { return valid(JSON.parse(localStorage.getItem(STORE))); } catch { return null; } }
 function save() { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* хранилище недоступно */ } }
 function commit() { history.push(JSON.stringify(state)); if (history.length > 100) history.shift(); }
@@ -55,7 +55,7 @@ function replaceState(next) { commit(); state = next; resetUi(); syncViewControl
 
 // Ссылка на задачу: всё состояние упаковано в адрес после #
 function encodeState() {
-  const bytes = new TextEncoder().encode(JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq }));
+  const bytes = new TextEncoder().encode(JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq, conds: state.conds }));
   let bin = '';
   bytes.forEach((b) => { bin += String.fromCharCode(b); });
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -74,7 +74,8 @@ function fromHash() {
 // ───────────────────────────── пересчёт и сцена ─────────────────────────────
 
 function refresh(figureChanged = false) {
-  try { solid = buildSolid(state.spec); specError = null; } catch (e) { specError = e.message; if (!solid) solid = buildSolid(defaultSpec('cube')); }
+  if (solveIfNeeded()) figureChanged = true;
+  try { solid = buildSolid(buildSpec(state.spec, state.conds)); solid.from = state.spec; specError = null; } catch (e) { specError = e.message; if (!solid) solid = buildSolid(defaultSpec('cube')); }
   ctx = evalNow();
   traces.clear();
   if (ui.steps && !traceOf(ui.steps.id)) ui.steps = null;
@@ -379,27 +380,32 @@ function renderFigure() {
   const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
   const unit = specUnit(s);
   // подписи полей — с именами вершин, которые выбрал пользователь
-  const fresh = !specError && solid.spec === s && !k.round;
+  const fresh = !specError && solid.from === s && !k.round;
   const rl = (t) => (fresh ? relabel(t, solid.defaultNames, solid.names) : t);
   let html = `<label class="field"><span>Фигура</span><select data-spec="kind">${Object.entries(KINDS).map(([v, x]) => opt(v, x.title, s.kind)).join('')}</select></label>`;
   if (k.bases) html += `<label class="field"><span>Основание</span><select data-spec="base">${k.bases.map((b) => opt(b, BASES[b].title, s.base)).join('')}</select></label>`;
   if (k.tilt) html += `<label class="field"><span>Боковые рёбра</span><select data-spec="tilt">${opt('right', 'перпендикулярны основанию (прямая)', s.tilt || 'right')}${opt('oblique', 'наклонные (наклонная призма)', s.tilt)}</select></label>`;
   if (k.hmode) html += `<label class="field"><span>Высоту задаём</span><select data-spec="hmode">${opt('h', 'высотой', s.hmode || 'h')}${opt('edge', 'боковым ребром', s.hmode)}</select></label>`;
   if (k.apex) {
-    const n = !specError && solid.spec === s ? solid.baseSize : { tri: 3, rtri: 3, tri3: 3, hex: 6 }[s.base] || 4;
+    const n = !specError && solid.from === s ? solid.baseSize : { tri: 3, rtri: 3, tri3: 3, hex: 6 }[s.base] || 4;
     const centerName = s.base === 'rtri' ? 'в середину гипотенузы' : ['tri3', 'trap', 'poly'].includes(s.base) ? 'в центроид вершин основания' : 'в центр основания';
     const who = s.kind === 'frustum' ? 'Вершина полной пирамиды проецируется' : rl('Вершина S проецируется');
     const vn = fresh ? solid.names : [...'ABCDEFGH'];
     html += `<label class="field"><span>${who}</span><select data-spec="apex">${opt('center', centerName, s.apex)}${vn.slice(0, n).map((c, i) => opt(String(i), `в вершину ${c}`, s.apex)).join('')}${opt('custom', 'в произвольную точку (x; y)', s.apex)}</select></label>`;
   }
+  const unknown = new Set((state.conds || []).map((c) => c.unknown));
   html += '<div class="params">' + k.params(s).map(([key, label, mode]) => {
     const raw = s.p[key] ?? DEFAULT_PARAMS[key];
+    if (unknown.has(key)) {
+      return `<label class="field solved"><span>${esc(rl(label))}</span><input data-param="${key}" value="${esc(raw)}" readonly title="Находится из условия задачи — чтобы задать вручную, удалите условие"><small>ищем из условия</small></label>`;
+    }
     return mode === 'pts'
       ? `<label class="field wide"><span>${esc(rl(label))}</span><textarea data-param="${key}" rows="3" spellcheck="false">${esc(raw)}</textarea></label>`
       : `<label class="field"><span>${esc(rl(label))}</span><input data-param="${key}" value="${esc(raw)}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, raw, label, SCALARS.includes(key) ? null : unit)}</label>`;
   }).join('') + '</div>';
   html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code> — или буквой: <code>a</code>, <code>2a</code>, <code>a/2</code>, <code>a√3</code>. С буквой все размеры должны быть пропорциональны ей, а ответы получатся в виде <code>a√3/2</code>, <code>a²√3/4</code>.</p>';
   if (unit) html += `<p class="fine">Ползунки меняют множитель при ${esc(unit)}.</p>`;
+  if (unit && unknown.has(UNIT) && s.unitVal) html += `<p class="fine solvedline">Из условия: <b>${esc(unit)} = ${esc(s.unitVal)}</b> — ответы ниже посчитаны при этом значении.</p>`;
   if (!k.round) {
     const names = fresh ? solid.names : [];
     const shown = names.every((x) => x.length === 1) ? names.join('') : names.join(' ');
@@ -419,6 +425,7 @@ function renderFigureInfo() {
     ? `<p class="err">${esc(specError)}</p>`
     : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}${fitBtn('figure', 'volume', { val: solid.volume, deg: 3 })}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}${fitBtn('figure', 'surface', { val: solid.surface, deg: 2 })}</dd>${(solid.info || []).map(([k, v, deg], i) => `<dt>${esc(k)}</dt><dd>${valHtml(v, deg)}${deg ? fitBtn('figure', 'info:' + i, { val: v, deg }) : ''}</dd>`).join('')}</dl>`
       + fitForm('figure')
+      + condsHtml()
       + (solid.unit ? `<p class="fine">Размеры заданы буквой: считаем, что ${esc(solid.unit)} > 0 — произвольная положительная длина. Ответы точны при любом таком ${esc(solid.unit)}.</p>` : '')
       + (solid.baseCoords && (state.spec.apex === 'custom' || state.spec.tilt === 'oblique' || state.spec.base === 'poly')
         ? `<p class="fine coords">Координаты основания: ${esc(solid.baseCoords)}</p>` : '');
@@ -528,40 +535,93 @@ function renderResults() {
   }).join('');
 }
 
-// ───────────────────────── подгонка под условие задачи ─────────────────────────
-// «Площадь сечения равна 12» — фигура перестраивается так, чтобы величина стала такой.
+// ───────────────────────── условия задачи ─────────────────────────
+// Величина из условия («площадь сечения = 12») + искомый размер. Условия хранятся в state.conds
+// и решаются вместе при каждом изменении данных размеров; искомые размеры пишутся в state.spec.p.
+
+let solvedKey = null, condError = null;
+
+/** Ключ всего, от чего зависит решение (без самих искомых — иначе решение меняло бы ключ) */
+function condKey() {
+  const unk = new Set(state.conds.map((c) => c.unknown));
+  const { p, unitVal, ...rest } = state.spec;
+  const known = Object.fromEntries(Object.entries(p).filter(([k]) => !unk.has(k)));
+  return JSON.stringify([rest, known, state.conds.map((c) => [c.target, c.text, c.unknown]), relevantItems(state.items, state.conds).map((it) => [it.id, it.def, it.refs])]);
+}
+
+/** Пересчитывает искомые размеры, если изменились данные; true — если фигура изменилась */
+function solveIfNeeded() {
+  if (!state.conds?.length) { condError = null; solvedKey = null; return false; }
+  if (sliding) return false; // пока тянут ползунок, не решаем — решим, когда отпустят
+  const key = condKey();
+  if (key === solvedKey) return false;
+  solvedKey = key;
+  const r = solveConds(state.spec, state.items, state.conds);
+  if (r.error) { condError = r.error; return false; }
+  condError = null;
+  const changed = JSON.stringify(r.spec) !== JSON.stringify(state.spec);
+  state.spec = r.spec;
+  return changed;
+}
 
 const fitKey = (owner, key) => `${owner}|${key}`;
-const fitTarget = (owner, key) => (owner === 'figure' ? { src: 'figure', key } : { src: 'item', id: owner, idx: +key });
+const condOf = (key) => state.conds.find((c) => c.key === key);
 
 function fitBtn(owner, key, row) {
   if (solid.round || specError || !fittable(row)) return '';
-  const on = ui.fit?.key === fitKey(owner, key);
-  return ` <button class="fitbtn${on ? ' on' : ''}" data-fitopen="${esc(fitKey(owner, key))}" data-deg="${row.deg}" title="Задать это значение — фигура подстроится под него" aria-label="Задать это значение">✎</button>`;
+  const k = fitKey(owner, key), c = condOf(k), on = ui.fit?.key === k;
+  const title = c ? `Условие задачи: ${c.text} — изменить` : 'Задать это значение из условия задачи';
+  return ` <button class="fitbtn${on ? ' on' : ''}${c ? ' has' : ''}" data-fitopen="${esc(k)}" data-deg="${row.deg}" data-word="${esc(String(row.k ?? '').split(/\s/)[0])}" title="${esc(title)}" aria-label="${esc(title)}">${c ? '★' : '✎'}</button>`;
 }
 
-/** Способы подгонки: пропорционально (если величина зависит от размера) и подбор каждого размера */
-function fitModes(deg) {
-  const rl = (t) => relabel(t, solid.defaultNames, solid.names);
-  const modes = deg === 'angle' || deg === '0' ? [] : [['scale', 'все размеры пропорционально']];
-  for (const [key, label] of fitParams(state.spec)) modes.push(['param:' + key, `только «${rl(label)}»`]);
-  return modes;
+const rlNow = (t) => relabel(t, solid.defaultNames, solid.names);
+function unknownLabel(u) {
+  if (u === UNIT) return specUnit(state.spec) || 'масштаб';
+  const ch = unknownChoices(state.spec).find(([k]) => k === u);
+  return ch ? rlNow(ch[1]) : u;
+}
+
+/** Подпись величины условия: «Сечение (KLM): Площадь», «Объём фигуры» */
+function condLabel(c) {
+  const t = c.target;
+  if (t.src === 'figure') {
+    if (t.key === 'volume') return 'Объём фигуры';
+    if (t.key === 'surface') return 'Площадь поверхности';
+    return solid.info?.[+t.key.split(':')[1]]?.[0] || 'Величина фигуры';
+  }
+  const res = ctx.results.get(t.id);
+  const row = res?.rows[t.idx];
+  return `${res?.title || 'Построение'}: ${(row?.k ?? t.word).replace(/^Угол φ$/, 'угол')}`;
+}
+
+function condsHtml() {
+  if (solid.round) return '';
+  const conds = state.conds || [];
+  if (!conds.length) return '<p class="fine">Дано в задаче не размер, а площадь сечения, расстояние, угол или объём? Нажмите ✎ рядом с этой величиной и введите её значение — фигура подстроится, а остальные размеры останутся как есть.</p>';
+  const status = condError ? condsStatus(state.spec, state.items, state.conds) : conds.map(() => true);
+  const found = conds.map((c) => `${esc(unknownLabel(c.unknown))} = <b>${esc(c.unknown === UNIT ? state.spec.unitVal || '?' : state.spec.p[c.unknown] ?? '?')}</b>`).join(', ');
+  return `<div class="conds"><h4>Условия задачи</h4><ul>${conds.map((c, i) => `<li class="${status[i] ? 'ok' : 'bad'}"><span class="mark" aria-hidden="true">${status[i] ? '✓' : '✗'}</span><span>${esc(condLabel(c))} = <b>${esc(c.deg === 'angle' && /^\d+$/.test(c.text.trim()) ? c.text.trim() + '°' : c.text)}</b></span><button data-conddel="${esc(c.id)}" title="Удалить условие" aria-label="Удалить условие">✕</button></li>`).join('')}</ul>`
+    + `<p class="fine">Ищем: ${found}${conds.length > 1 ? ' — все условия решаются вместе' : ''}.</p>`
+    + (condError ? `<p class="err">${esc(condError)}</p>` : '')
+    + '</div>';
 }
 
 function fitForm(owner) {
   const f = ui.fit;
   if (!f || f.owner !== owner) return '';
-  const modes = fitModes(f.deg);
   const angle = f.deg === 'angle';
-  if (!modes.find(([m]) => m === f.mode)) f.mode = modes[0]?.[0];
+  const taken = new Set(state.conds.filter((c) => c.key !== f.key).map((c) => c.unknown));
+  const choices = unknownChoices(state.spec).filter(([k]) => !taken.has(k) && !(k === UNIT && (angle || f.deg === '0')));
+  if (!choices.find(([k]) => k === f.unknown)) f.unknown = (choices.find(([k]) => k === 'h' || k === 'l') || choices.find(([k]) => k === UNIT) || choices[0])?.[0];
+  const editing = !!condOf(f.key);
   const ph = angle ? '60 или tg = 2' : 'например, 12 или 6√3';
   return `<form class="fit" data-fitform>
-    <label class="field"><span>${angle ? 'Угол (в градусах или значение функции)' : 'Значение по условию задачи'}</span><input data-fitval value="${esc(f.text)}" placeholder="${esc(ph)}" spellcheck="false" autocomplete="off"></label>
-    ${modes.length ? `<label class="field"><span>Что меняем</span><select data-fitmode>${modes.map(([m, t]) => `<option value="${m}"${m === f.mode ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
-    ${!modes.length ? '<p class="err">Угол и отношения не зависят от масштаба, а подбирать отдельный размер можно, только когда размеры заданы числами.</p>' : ''}
-    <div class="row">${modes.length ? '<button type="submit">Подогнать</button>' : ''}<button type="button" data-fitcancel>Отмена</button></div>
-    ${f.busy ? '<p class="fine">Считаю…</p>' : f.err ? `<p class="err">${esc(f.err)}</p>` : ''}
-    <p class="fine">Фигура подстроится один раз; построения сохранятся. Если потом изменить размеры, условие уже не будет выполняться.</p>
+    <label class="field"><span>${angle ? 'Угол по условию (в градусах или значение функции)' : 'Значение по условию задачи'}</span><input data-fitval value="${esc(f.text)}" placeholder="${esc(ph)}" spellcheck="false" autocomplete="off"></label>
+    ${choices.length ? `<label class="field"><span>Какой размер неизвестен (его и найдём)</span><select data-fitmode>${choices.map(([k, t]) => `<option value="${esc(k)}"${k === f.unknown ? ' selected' : ''}>${esc(k === UNIT ? t : rlNow(t))}</option>`).join('')}</select></label>`
+    : '<p class="err">Все размеры уже ищутся по другим условиям — удалите одно из них или задайте размер вручную.</p>'}
+    <div class="row">${choices.length ? `<button type="submit">${editing ? 'Сохранить' : 'Добавить условие'}</button>` : ''}${editing ? '<button type="button" data-fitdel>Удалить</button>' : ''}<button type="button" data-fitcancel>Отмена</button></div>
+    ${f.err ? `<p class="err">${esc(f.err)}</p>` : ''}
+    <p class="fine">Остальные размеры — данные: они не меняются. Можно добавить несколько условий, у каждого — своё неизвестное.</p>
   </form>`;
 }
 
@@ -569,41 +629,43 @@ function renderFit() { renderFigureInfo(); renderResults(); $('[data-fitform] [d
 
 function applyFit() {
   const f = ui.fit;
-  if (!f) return;
-  const target = fitTarget(f.owner, f.key.split('|')[1]);
-  let out, msg;
-  try {
-    if (f.mode === 'scale') {
-      out = fitScale(state.spec, state.items, target, f.text);
-      msg = out.message;
-    } else {
-      const key = f.mode.slice(6);
-      out = fitParam(state.spec, state.items, target, key, f.text);
-      const label = relabel(fitParams(state.spec).find(([k]) => k === key)[1], solid.defaultNames, solid.names);
-      msg = `${label} = ${fmtNum(out.value)}` + (out.others.length ? `. Есть и другие решения: ≈ ${out.others.join(', ≈ ')}` : '');
-    }
-  } catch (e) {
-    f.err = e.message;
-    renderFit();
-    return;
-  }
+  if (!f || !f.unknown) return;
+  const [owner, key] = f.key.split('|');
+  const old = condOf(f.key);
+  const cond = {
+    id: old?.id || newId(), key: f.key, deg: f.deg === 'angle' ? 'angle' : +f.deg, text: f.text.trim(), unknown: f.unknown,
+    target: owner === 'figure' ? { src: 'figure', key } : { src: 'item', id: owner, idx: +key, word: f.word },
+  };
+  const conds = old ? state.conds.map((c) => (c === old ? cond : c)) : [...state.conds, cond];
+  const r = solveConds(state.spec, state.items, conds);
+  if (r.error) { f.err = r.error; renderFit(); return; }
   commit();
-  state.spec = out.spec;
+  state.spec = r.spec;
+  state.conds = conds;
   ui.fit = null;
   refresh(true);
-  toast(msg);
+  toast(`${unknownLabel(cond.unknown)} = ${cond.unknown === UNIT ? state.spec.unitVal : state.spec.p[cond.unknown]}`);
+}
+
+function removeCond(pred) {
+  commit();
+  state.conds = state.conds.filter((c) => !pred(c));
+  ui.fit = null;
+  refresh(true);
 }
 
 document.addEventListener('click', (e) => {
   const open = e.target.closest('[data-fitopen]');
   if (open) {
-    const key = open.dataset.fitopen;
-    ui.fit = ui.fit?.key === key ? null : { key, owner: key.split('|')[0], deg: open.dataset.deg, text: '', mode: null, err: '' };
+    const key = open.dataset.fitopen, c = condOf(key);
+    ui.fit = ui.fit?.key === key ? null : { key, owner: key.split('|')[0], deg: open.dataset.deg, word: open.dataset.word, text: c?.text || '', unknown: c?.unknown || null, err: '' };
     renderFit();
   } else if (e.target.closest('[data-fitcancel]')) { ui.fit = null; renderFit(); }
+  else if (e.target.closest('[data-fitdel]')) { const k = ui.fit.key; removeCond((c) => c.key === k); }
+  else if (e.target.closest('[data-conddel]')) { const id = e.target.closest('[data-conddel]').dataset.conddel; removeCond((c) => c.id === id); }
 });
 document.addEventListener('input', (e) => { if (ui.fit && 'fitval' in e.target.dataset) { ui.fit.text = e.target.value; ui.fit.err = ''; } });
-document.addEventListener('change', (e) => { if (ui.fit && 'fitmode' in e.target.dataset) { ui.fit.mode = e.target.value; ui.fit.err = ''; } });
+document.addEventListener('change', (e) => { if (ui.fit && 'fitmode' in e.target.dataset) { ui.fit.unknown = e.target.value; ui.fit.err = ''; } });
 document.addEventListener('submit', (e) => {
   if (!e.target.matches('[data-fitform]')) return;
   e.preventDefault();
@@ -671,7 +733,7 @@ $('#figure').addEventListener('input', (e) => {
 
 $('#figure').addEventListener('change', (e) => {
   const t = e.target;
-  if (t.dataset.slide) { sliding = false; return; }
+  if (t.dataset.slide) { sliding = false; if (state.conds.length) refresh(true); return; }
   if (t.dataset.param && t.dataset.param !== 'pts') {
     const sl = $(`#figure [data-slide="${t.dataset.param}"]`), v = approxOf(t.value);
     if (sl && Number.isFinite(v)) { sl.max = Math.max(+sl.max, Math.ceil(v)); sl.min = Math.min(+sl.min, Math.floor(v)); sl.value = v; }
@@ -705,7 +767,7 @@ $('#figure').addEventListener('change', (e) => {
     if (key === 'kind') state.spec = { ...defaultSpec(t.value), p: state.spec.p };
     else if (key === 'hmode') state.spec = { ...state.spec, hmode: t.value, p: keepShape(t.value) };
     else state.spec = { ...state.spec, [key]: t.value };
-    if (key === 'kind' || key === 'base') { state.items = []; resetUi(); }
+    if (key === 'kind' || key === 'base') { state.items = []; state.conds = []; resetUi(); }
     if (key === 'base') { state.spec.apex = 'center'; delete state.spec.names; }
     state.spec = harmonize(state.spec);
     ui.tool = null; ui.picked = [];
@@ -716,7 +778,7 @@ $('#figure').addEventListener('change', (e) => {
     // если у основания стало другое число вершин, старые построения к новой фигуре не относятся
     const before = solid.verts.length;
     refresh();
-    if (!specError && solid.verts.length !== before) { state.items = []; delete state.spec.names; resetUi(); refresh(true); }
+    if (!specError && solid.verts.length !== before) { state.items = []; state.conds = []; delete state.spec.names; resetUi(); refresh(true); }
   }
 });
 
@@ -734,6 +796,7 @@ $('#results').addEventListener('click', (e) => {
     commit();
     const dead = withDependents(state.items, id);
     state.items = state.items.filter((x) => !dead.has(x.id));
+    state.conds = state.conds.filter((c) => !(c.target.src === 'item' && dead.has(c.target.id)));
     ui.picked = [];
     refresh();
   } else if (act === 'hide') { it.hide = !it.hide; refresh(); }
@@ -789,7 +852,7 @@ hidden.addEventListener('change', () => { state.opts.hidden = hidden.checked; vi
 labels.addEventListener('change', () => { state.opts.labels = labels.checked; view.invalidate(); save(); });
 $('#home').addEventListener('click', () => { view.zoom = 1; view.animateTo(HOME.yaw, HOME.pitch); });
 $('#undo').addEventListener('click', undo);
-$('#clear').addEventListener('click', () => { if (!state.items.length) return; commit(); state.items = []; resetUi(); refresh(); });
+$('#clear').addEventListener('click', () => { if (!state.items.length) return; commit(); state.items = []; state.conds = state.conds.filter((c) => c.target.src !== 'item'); resetUi(); refresh(true); });
 $('#show-net').addEventListener('click', showNet);
 $('#net-close').addEventListener('click', () => $('#net').close());
 $('#export-svg').addEventListener('click', exportSvg);
@@ -804,7 +867,7 @@ exSel.addEventListener('change', () => {
   if (ex.steps) { ui.steps = { id: ex.steps, k: 0 }; refresh(); }
 });
 
-$('#save-file').addEventListener('click', () => download('задача.facets.json', JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq }, null, 2), 'application/json'));
+$('#save-file').addEventListener('click', () => download('задача.facets.json', JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq, conds: state.conds }, null, 2), 'application/json'));
 $('#open-file').addEventListener('click', () => $('#file').click());
 $('#file').addEventListener('change', async (e) => {
   const file = e.target.files[0];

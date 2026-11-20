@@ -407,6 +407,9 @@ function parseExpr(src) {
   return { v: x.v, deg: x.v.isZero() ? 0 : x.d, sym };
 }
 
+/** Величина с буквой в любой степени: { v, deg, sym } (12a² → v = 12, deg = 2, sym = 'a') */
+export function parseQty(src) { return parseExpr(src); }
+
 /** Число без букв */
 export function parseNum(src) {
   const x = parseExpr(src);

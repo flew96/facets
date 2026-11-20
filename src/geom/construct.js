@@ -54,7 +54,8 @@ export function withDependents(items, id) {
 // Если размеры фигуры заданы буквой, значение — коэффициент при этой степени буквы.
 const row = (S, k, val, deg = 0) => {
   const u = unitStr(S.unit, deg);
-  return { k, v: fmtVal(val, u), a: isPlain(val) ? '' : fmtApprox(valToNumber(val)) + (u ? '·' + u : '') };
+  // val и deg нужны, чтобы величину можно было задать и подогнать под неё фигуру (см. fit.js)
+  return { k, v: fmtVal(val, u), a: isPlain(val) ? '' : fmtApprox(valToNumber(val)) + (u ? '·' + u : ''), val, deg };
 };
 const lenStr = (S, val) => fmtVal(val, unitStr(S.unit, 1));
 const text = (k, v) => ({ k, v, a: '' });
@@ -231,17 +232,19 @@ const SPECIAL = [[N(0), 90], [N('1/4'), 60], [N('1/2'), 45], [N('3/4'), 30], [N(
 
 /** Строки результата для угла по cos² (или sin²) */
 function angleRows(x2, fn) {
+  // для подгонки угол хранится как cos² φ
+  const fit = { val: fn === 'cos' ? x2 : ONE.sub(x2), deg: 'angle' };
   const hit = SPECIAL.find(([v]) => v.eq(x2));
   const val = rootOf(x2);
   const s = fmtVal(val);
   if (hit) {
     const deg = fn === 'cos' ? hit[1] : 90 - hit[1];
-    return [text('Угол φ', `${deg}°`), text(`${fn} φ`, s)];
+    return [{ ...text('Угол φ', `${deg}°`), ...fit }, text(`${fn} φ`, s)];
   }
   const x = Math.sqrt(x2.toNumber());
   const deg = ((fn === 'cos' ? Math.acos(x) : Math.asin(x)) * 180) / Math.PI;
   const arg = /[ /]/.test(s) ? `(${s})` : ` ${s}`;
-  return [{ k: 'Угол φ', v: `arc${fn}${arg}`, a: fmtApprox(deg, 2) + '°' }, { k: `${fn} φ`, v: s, a: fmtApprox(x) }];
+  return [{ k: 'Угол φ', v: `arc${fn}${arg}`, a: fmtApprox(deg, 2) + '°', ...fit }, { k: `${fn} φ`, v: s, a: fmtApprox(x) }];
 }
 
 // ─────────────────────────────── построения ───────────────────────────────

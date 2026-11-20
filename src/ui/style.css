@@ -192,3 +192,10 @@ dialog#net::backdrop { background: rgb(0 0 0 / .45); }
 .nface { fill: color-mix(in srgb, var(--face) 16%, transparent); stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; }
 .ncut { stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; }
 .nlabel { font: italic 15px var(--math); fill: var(--ink); text-anchor: middle; dominant-baseline: central; }
+
+/* подгонка под условие */
+.fitbtn { border: none; background: none; padding: 0 4px; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; vertical-align: 1px; }
+.fitbtn:hover, .fitbtn.on { color: var(--accent); }
+.fit { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; margin-top: 6px; }
+.fit .field { margin: 0; }
+.fit .row button[type=submit] { border-color: var(--accent); }

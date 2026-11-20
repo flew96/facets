@@ -420,3 +420,28 @@ test('свои обозначения вершин', async () => {
   const r = run(S, [{ id: 's', kind: 'dist', refs: ['v3', 'v0'] }]);
   assert.equal(r('s').title, 'Отрезок DA');
 });
+
+test('подгонка фигуры под заданную величину', async () => {
+  const { fitScale, fitParam } = await import('../src/geom/fit.js');
+  const spec = (kind, p, extra = {}) => ({ ...defaultSpec(kind), ...extra, p: { ...defaultSpec(kind).p, ...p } });
+  // площадь сечения куба (ABC₁) 4√2 → 8√2: все размеры ×√2
+  const sec = [{ id: 's', kind: 'section', refs: ['v0', 'v1', 'v6'] }];
+  const f1 = fitScale(spec('cube', {}), sec, { src: 'item', id: 's', idx: 1 }, '8√2');
+  assert.equal(f1.spec.p.a, '2√2');
+  assert.equal(rows(run(buildSolid(f1.spec), sec)('s'))['Площадь'], '8√2');
+  // буквенная пирамида: V = 4a³ = 32 → a = 2, размеры становятся числами
+  const f2 = fitScale(spec('pyramid', { a: '2a', h: '3a' }, { base: 'sq' }), [], { src: 'figure', key: 'volume' }, '32');
+  assert.deepEqual([f2.spec.p.a, f2.spec.p.h, specUnit(f2.spec)], ['4', '6', null]);
+  // кубический корень не извлекается — ошибка
+  assert.throws(() => fitScale(spec('cube', {}), [], { src: 'figure', key: 'volume' }, '16'), /кубический корень/);
+  // правильная треугольная пирамида a = 6: подбираем высоту
+  const pyr = spec('pyramid', { a: '6', h: '5' }, { base: 'tri' });
+  const ang = [{ id: 'g', kind: 'anglePP', refs: ['v0', 'v1', 'v3', 'v0', 'v1', 'v2'] }];
+  assert.equal(fitParam(pyr, ang, { src: 'item', id: 'g', idx: 0 }, 'h', '60').spec.p.h, '3');
+  assert.equal(fitParam(pyr, ang, { src: 'item', id: 'g', idx: 0 }, 'h', 'tg = 2').spec.p.h, '2√3');
+  assert.equal(fitParam(pyr, [], { src: 'figure', key: 'volume' }, 'h', '10').spec.p.h, '10√3/9');
+  assert.throws(() => fitParam(pyr, [], { src: 'figure', key: 'surface' }, 'h', '7'), /Не нашлось/);
+  assert.equal(fitParam(pyr, [], { src: 'figure', key: 'surface' }, 'h', '45√3').spec.p.h, '3√5');
+  assert.throws(() => fitParam(pyr, [], { src: 'figure', key: 'surface' }, 'h', '50'), /≈ 3,4087.*не изменена/);
+  assert.throws(() => fitScale(pyr, ang, { src: 'item', id: 'g', idx: 0 }, '60'), /не зависит/);
+});

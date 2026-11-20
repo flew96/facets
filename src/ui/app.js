@@ -5,6 +5,7 @@ import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.j
 import { roundTools, roundToolGroups, evaluateRound, ANGLE_STEP } from '../geom/round.js';
 import { buildTrace } from '../geom/trace.js';
 import { explain } from '../geom/explain.js';
+import { fittable, fitScale, fitParam, fitParams } from '../geom/fit.js';
 import { View, HOME } from './view.js';
 import { netSvg } from './net.js';
 import { EXAMPLES } from './examples.js';
@@ -34,7 +35,7 @@ const freshState = (ex) => ({ opts: { alpha: 0.1, hidden: true, labels: true }, 
 
 let state = fromHash() || load() || freshState(EXAMPLES[0]);
 let solid = null, specError = null, ctx = null;
-const ui = { tool: null, picked: [], unfolded: new Set(), solOpen: new Set(), steps: null };
+const ui = { tool: null, picked: [], unfolded: new Set(), solOpen: new Set(), steps: null, fit: null };
 const history = [];
 const traces = new Map();
 const view = new View($('#view'));
@@ -43,7 +44,7 @@ function valid(s) { return s && s.spec && KINDS[s.spec.kind] && Array.isArray(s.
 function load() { try { return valid(JSON.parse(localStorage.getItem(STORE))); } catch { return null; } }
 function save() { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* хранилище недоступно */ } }
 function commit() { history.push(JSON.stringify(state)); if (history.length > 100) history.shift(); }
-function resetUi() { ui.tool = null; ui.picked = []; ui.steps = null; ui.unfolded.clear(); ui.solOpen.clear(); view.preview = null; }
+function resetUi() { ui.tool = null; ui.picked = []; ui.steps = null; ui.fit = null; ui.unfolded.clear(); ui.solOpen.clear(); view.preview = null; }
 function undo() {
   if (!history.length) return;
   state = JSON.parse(history.pop());
@@ -416,7 +417,8 @@ function valHtml(v, deg) {
 function renderFigureInfo() {
   $('#figure-info').innerHTML = specError
     ? `<p class="err">${esc(specError)}</p>`
-    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}</dd>${(solid.info || []).map(([k, v, deg]) => `<dt>${esc(k)}</dt><dd>${valHtml(v, deg)}</dd>`).join('')}</dl>`
+    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}${fitBtn('figure', 'volume', { val: solid.volume, deg: 3 })}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}${fitBtn('figure', 'surface', { val: solid.surface, deg: 2 })}</dd>${(solid.info || []).map(([k, v, deg], i) => `<dt>${esc(k)}</dt><dd>${valHtml(v, deg)}${deg ? fitBtn('figure', 'info:' + i, { val: v, deg }) : ''}</dd>`).join('')}</dl>`
+      + fitForm('figure')
       + (solid.unit ? `<p class="fine">Размеры заданы буквой: считаем, что ${esc(solid.unit)} > 0 — произвольная положительная длина. Ответы точны при любом таком ${esc(solid.unit)}.</p>` : '')
       + (solid.baseCoords && (state.spec.apex === 'custom' || state.spec.tilt === 'oblique' || state.spec.base === 'poly')
         ? `<p class="fine coords">Координаты основания: ${esc(solid.baseCoords)}</p>` : '');
@@ -511,7 +513,8 @@ function renderResults() {
     if (r.absent || r.badge) body += `<p class="badge">${esc(r.badge || 'не существует')}</p>`;
     if (r.section) body += sectionExtras(it, r);
     const rows = isPoint && it.def.t === 'ratio' ? [] : r.rows;
-    if (rows.length) body += '<dl>' + rows.map((x) => `<dt>${esc(x.k)}</dt><dd><b>${esc(x.v)}</b>${x.a ? ` <span class="approx">≈ ${x.a}</span>` : ''}</dd>`).join('') + '</dl>';
+    if (rows.length) body += '<dl>' + rows.map((x, i) => `<dt>${esc(x.k)}</dt><dd><b>${esc(x.v)}</b>${x.a ? ` <span class="approx">≈ ${x.a}</span>` : ''}${fitBtn(it.id, String(i), x)}</dd>`).join('') + '</dl>';
+    body += fitForm(it.id);
     body += r.notes.map((n) => `<p class="note">${esc(n)}</p>`).join('');
     const sol = isPoint ? null : explain(it, ctx);
     if (sol) body += `<details class="sol"${ui.solOpen.has(it.id) ? ' open' : ''}><summary>Решение методом координат</summary><ol>${sol.map((l) => `<li>${esc(l)}</li>`).join('')}</ol></details>`;
@@ -524,6 +527,88 @@ function renderResults() {
       <button data-act="del" title="Удалить">✕</button></header>${body}</article>`;
   }).join('');
 }
+
+// ───────────────────────── подгонка под условие задачи ─────────────────────────
+// «Площадь сечения равна 12» — фигура перестраивается так, чтобы величина стала такой.
+
+const fitKey = (owner, key) => `${owner}|${key}`;
+const fitTarget = (owner, key) => (owner === 'figure' ? { src: 'figure', key } : { src: 'item', id: owner, idx: +key });
+
+function fitBtn(owner, key, row) {
+  if (solid.round || specError || !fittable(row)) return '';
+  const on = ui.fit?.key === fitKey(owner, key);
+  return ` <button class="fitbtn${on ? ' on' : ''}" data-fitopen="${esc(fitKey(owner, key))}" data-deg="${row.deg}" title="Задать это значение — фигура подстроится под него" aria-label="Задать это значение">✎</button>`;
+}
+
+/** Способы подгонки: пропорционально (если величина зависит от размера) и подбор каждого размера */
+function fitModes(deg) {
+  const rl = (t) => relabel(t, solid.defaultNames, solid.names);
+  const modes = deg === 'angle' || deg === '0' ? [] : [['scale', 'все размеры пропорционально']];
+  for (const [key, label] of fitParams(state.spec)) modes.push(['param:' + key, `только «${rl(label)}»`]);
+  return modes;
+}
+
+function fitForm(owner) {
+  const f = ui.fit;
+  if (!f || f.owner !== owner) return '';
+  const modes = fitModes(f.deg);
+  const angle = f.deg === 'angle';
+  if (!modes.find(([m]) => m === f.mode)) f.mode = modes[0]?.[0];
+  const ph = angle ? '60 или tg = 2' : 'например, 12 или 6√3';
+  return `<form class="fit" data-fitform>
+    <label class="field"><span>${angle ? 'Угол (в градусах или значение функции)' : 'Значение по условию задачи'}</span><input data-fitval value="${esc(f.text)}" placeholder="${esc(ph)}" spellcheck="false" autocomplete="off"></label>
+    ${modes.length ? `<label class="field"><span>Что меняем</span><select data-fitmode>${modes.map(([m, t]) => `<option value="${m}"${m === f.mode ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
+    ${!modes.length ? '<p class="err">Угол и отношения не зависят от масштаба, а подбирать отдельный размер можно, только когда размеры заданы числами.</p>' : ''}
+    <div class="row">${modes.length ? '<button type="submit">Подогнать</button>' : ''}<button type="button" data-fitcancel>Отмена</button></div>
+    ${f.busy ? '<p class="fine">Считаю…</p>' : f.err ? `<p class="err">${esc(f.err)}</p>` : ''}
+    <p class="fine">Фигура подстроится один раз; построения сохранятся. Если потом изменить размеры, условие уже не будет выполняться.</p>
+  </form>`;
+}
+
+function renderFit() { renderFigureInfo(); renderResults(); $('[data-fitform] [data-fitval]')?.focus(); }
+
+function applyFit() {
+  const f = ui.fit;
+  if (!f) return;
+  const target = fitTarget(f.owner, f.key.split('|')[1]);
+  let out, msg;
+  try {
+    if (f.mode === 'scale') {
+      out = fitScale(state.spec, state.items, target, f.text);
+      msg = out.message;
+    } else {
+      const key = f.mode.slice(6);
+      out = fitParam(state.spec, state.items, target, key, f.text);
+      const label = relabel(fitParams(state.spec).find(([k]) => k === key)[1], solid.defaultNames, solid.names);
+      msg = `${label} = ${fmtNum(out.value)}` + (out.others.length ? `. Есть и другие решения: ≈ ${out.others.join(', ≈ ')}` : '');
+    }
+  } catch (e) {
+    f.err = e.message;
+    renderFit();
+    return;
+  }
+  commit();
+  state.spec = out.spec;
+  ui.fit = null;
+  refresh(true);
+  toast(msg);
+}
+
+document.addEventListener('click', (e) => {
+  const open = e.target.closest('[data-fitopen]');
+  if (open) {
+    const key = open.dataset.fitopen;
+    ui.fit = ui.fit?.key === key ? null : { key, owner: key.split('|')[0], deg: open.dataset.deg, text: '', mode: null, err: '' };
+    renderFit();
+  } else if (e.target.closest('[data-fitcancel]')) { ui.fit = null; renderFit(); }
+});
+document.addEventListener('input', (e) => { if (ui.fit && 'fitval' in e.target.dataset) { ui.fit.text = e.target.value; ui.fit.err = ''; } });
+document.addEventListener('change', (e) => { if (ui.fit && 'fitmode' in e.target.dataset) { ui.fit.mode = e.target.value; ui.fit.err = ''; } });
+document.addEventListener('submit', (e) => {
+  if (!e.target.matches('[data-fitform]')) return;
+  e.preventDefault();
+  applyFit();
+});
 
 // ──────────────────────────── развёртка и файлы ────────────────────────────
 
@@ -736,6 +821,7 @@ $('#copy-link').addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && ui.fit) { ui.fit = null; renderFit(); return; }
   if (e.key === 'Escape' && ui.tool) cancelTool();
   if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) { e.preventDefault(); undo(); }
   if (ui.steps && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {

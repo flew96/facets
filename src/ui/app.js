@@ -5,7 +5,7 @@ import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.j
 import { roundTools, roundToolGroups, evaluateRound, ANGLE_STEP } from '../geom/round.js';
 import { buildTrace } from '../geom/trace.js';
 import { explain } from '../geom/explain.js';
-import { fittable, solveConds, buildSpec, unknownChoices, relevantItems, condsStatus, UNIT } from '../geom/fit.js';
+import { fittable, solveConds, buildSpec, unknownChoices, relevantItems, condsStatus, freeDeps, UNIT } from '../geom/fit.js';
 import { View, HOME } from './view.js';
 import { netSvg } from './net.js';
 import { EXAMPLES } from './examples.js';
@@ -77,6 +77,7 @@ function refresh(figureChanged = false) {
   if (solveIfNeeded()) figureChanged = true;
   try { solid = buildSolid(buildSpec(state.spec, state.conds)); solid.from = state.spec; specError = null; } catch (e) { specError = e.message; if (!solid) solid = buildSolid(defaultSpec('cube')); }
   ctx = evalNow();
+  updateDeps();
   traces.clear();
   if (ui.steps && !traceOf(ui.steps.id)) ui.steps = null;
   view.opts = state.opts;
@@ -396,6 +397,9 @@ function renderFigure() {
   const unknown = new Set((state.conds || []).map((c) => c.unknown));
   html += '<div class="params">' + k.params(s).map(([key, label, mode]) => {
     const raw = s.p[key] ?? DEFAULT_PARAMS[key];
+    if (!unknown.has(key) && mode !== 'pts' && (s.free || []).includes(key)) {
+      return `<label class="field free"><span>${esc(rl(label))}</span><input data-param="${key}" value="?" spellcheck="false" autocomplete="off" title="Размер не задан. Введите число, чтобы задать его"><small>не задано · сейчас ${esc(raw)}</small></label>`;
+    }
     if (unknown.has(key)) {
       return `<label class="field solved"><span>${esc(rl(label))}</span><input data-param="${key}" value="${esc(raw)}" readonly title="Находится из условия задачи — чтобы задать вручную, удалите условие"><small>ищем из условия</small></label>`;
     }
@@ -403,6 +407,7 @@ function renderFigure() {
       ? `<label class="field wide"><span>${esc(rl(label))}</span><textarea data-param="${key}" rows="3" spellcheck="false">${esc(raw)}</textarea></label>`
       : `<label class="field"><span>${esc(rl(label))}</span><input data-param="${key}" value="${esc(raw)}" spellcheck="false" autocomplete="off">${sliderHtml(key, mode, raw, label, SCALARS.includes(key) ? null : unit)}</label>`;
   }).join('') + '</div>';
+  html += '<p class="fine">Неизвестный размер — знак <code>?</code>: его найдёт условие задачи (✎), а если условия нет, ответы, которые от него зависят, будут помечены.</p>';
   html += '<p class="fine">Размеры можно вводить точно: <code>3/2</code>, <code>2√3</code>, <code>sqrt(2)</code> — или буквой: <code>a</code>, <code>2a</code>, <code>a/2</code>, <code>a√3</code>. С буквой все размеры должны быть пропорциональны ей, а ответы получатся в виде <code>a√3/2</code>, <code>a²√3/4</code>.</p>';
   if (unit) html += `<p class="fine">Ползунки меняют множитель при ${esc(unit)}.</p>`;
   if (unit && unknown.has(UNIT) && s.unitVal) html += `<p class="fine solvedline">Из условия: <b>${esc(unit)} = ${esc(s.unitVal)}</b> — ответы ниже посчитаны при этом значении.</p>`;
@@ -423,7 +428,7 @@ function valHtml(v, deg) {
 function renderFigureInfo() {
   $('#figure-info').innerHTML = specError
     ? `<p class="err">${esc(specError)}</p>`
-    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}${fitBtn('figure', 'volume', { val: solid.volume, deg: 3 })}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}${fitBtn('figure', 'surface', { val: solid.surface, deg: 2 })}</dd>${(solid.info || []).map(([k, v, deg], i) => `<dt>${esc(k)}</dt><dd>${valHtml(v, deg)}${deg ? fitBtn('figure', 'info:' + i, { val: v, deg }) : ''}</dd>`).join('')}</dl>`
+    : `<dl><dt>Объём</dt><dd>${valHtml(solid.volume, 3)}${fitBtn('figure', 'volume', { val: solid.volume, deg: 3 })}${depMark('figure|volume')}</dd><dt>Площадь поверхности</dt><dd>${valHtml(solid.surface, 2)}${fitBtn('figure', 'surface', { val: solid.surface, deg: 2 })}${depMark('figure|surface')}</dd>${(solid.info || []).map(([k, v, deg], i) => `<dt>${esc(k)}</dt><dd>${valHtml(v, deg)}${deg ? fitBtn('figure', 'info:' + i, { val: v, deg }) : ''}${depMark('figure|info:' + i)}</dd>`).join('')}</dl>`
       + fitForm('figure')
       + condsHtml()
       + (solid.unit ? `<p class="fine">Размеры заданы буквой: считаем, что ${esc(solid.unit)} > 0 — произвольная положительная длина. Ответы точны при любом таком ${esc(solid.unit)}.</p>` : '')
@@ -520,7 +525,7 @@ function renderResults() {
     if (r.absent || r.badge) body += `<p class="badge">${esc(r.badge || 'не существует')}</p>`;
     if (r.section) body += sectionExtras(it, r);
     const rows = isPoint && it.def.t === 'ratio' ? [] : r.rows;
-    if (rows.length) body += '<dl>' + rows.map((x, i) => `<dt>${esc(x.k)}</dt><dd><b>${esc(x.v)}</b>${x.a ? ` <span class="approx">≈ ${x.a}</span>` : ''}${fitBtn(it.id, String(i), x)}</dd>`).join('') + '</dl>';
+    if (rows.length) body += '<dl>' + rows.map((x, i) => `<dt>${esc(x.k)}</dt><dd><b>${esc(x.v)}</b>${x.a ? ` <span class="approx">≈ ${x.a}</span>` : ''}${fitBtn(it.id, String(i), x)}${depMark(`${it.id}|${i}`)}</dd>`).join('') + '</dl>';
     body += fitForm(it.id);
     body += r.notes.map((n) => `<p class="note">${esc(n)}</p>`).join('');
     const sol = isPoint ? null : explain(it, ctx);
@@ -564,6 +569,29 @@ function solveIfNeeded() {
   return changed;
 }
 
+// Незаданные («?») размеры, которые не ищутся ни одним условием: проверяем, какие ответы от них зависят
+let depsKey = null, deps = null;
+function unpairedFree() {
+  if (solid?.round || specError) return [];
+  const unk = new Set(state.conds.map((c) => c.unknown));
+  const keys = KINDS[state.spec.kind].params(state.spec).map(([k]) => k);
+  return (state.spec.free || []).filter((k) => keys.includes(k) && !unk.has(k));
+}
+function updateDeps() {
+  const keys = unpairedFree();
+  if (!keys.length) { deps = null; depsKey = null; return; }
+  if (sliding) return;
+  const key = JSON.stringify([state.spec, state.conds, state.items.map((it) => [it.id, it.kind, it.def, it.refs])]);
+  if (key === depsKey) return;
+  depsKey = key;
+  try { deps = freeDeps(state.spec, state.items, state.conds, keys); } catch { deps = null; }
+}
+const freeNames = () => unpairedFree().map((k) => `«${unknownLabel(k)}»`).join(', ');
+function depMark(key) {
+  if (!deps?.has(key)) return '';
+  return ` <span class="dep" title="Значение посчитано при текущем значении незаданного размера; при другом оно будет другим">зависит от ${esc(freeNames())}</span>`;
+}
+
 const fitKey = (owner, key) => `${owner}|${key}`;
 const condOf = (key) => state.conds.find((c) => c.key === key);
 
@@ -594,8 +622,19 @@ function condLabel(c) {
   return `${res?.title || 'Построение'}: ${(row?.k ?? t.word).replace(/^Угол φ$/, 'угол')}`;
 }
 
+function freeNote() {
+  const keys = unpairedFree();
+  if (!keys.length) return '';
+  const vals = keys.map((k) => `${esc(unknownLabel(k))} = ${esc(state.spec.p[k])}`).join(', ');
+  return `<p class="fine freenote">Не задано (?): взято ${vals}. ${deps === null ? 'Проверить, какие ответы от этого зависят, не удалось.' : deps.size ? 'Ответы с пометкой «зависит от …» при другом значении будут другими; остальные от него не зависят.' : 'Ни один ответ от этого размера не зависит.'}</p>`;
+}
+
 function condsHtml() {
   if (solid.round) return '';
+  return condsList() + freeNote();
+}
+
+function condsList() {
   const conds = state.conds || [];
   if (!conds.length) return '<p class="fine">Дано в задаче не размер, а площадь сечения, расстояние, угол или объём? Нажмите ✎ рядом с этой величиной и введите её значение — фигура подстроится, а остальные размеры останутся как есть.</p>';
   const status = condError ? condsStatus(state.spec, state.items, state.conds) : conds.map(() => true);
@@ -612,12 +651,13 @@ function fitForm(owner) {
   const angle = f.deg === 'angle';
   const taken = new Set(state.conds.filter((c) => c.key !== f.key).map((c) => c.unknown));
   const choices = unknownChoices(state.spec).filter(([k]) => !taken.has(k) && !(k === UNIT && (angle || f.deg === '0')));
-  if (!choices.find(([k]) => k === f.unknown)) f.unknown = (choices.find(([k]) => k === 'h' || k === 'l') || choices.find(([k]) => k === UNIT) || choices[0])?.[0];
+  const free = new Set(state.spec.free || []);
+  if (!choices.find(([k]) => k === f.unknown)) f.unknown = (choices.find(([k]) => free.has(k)) || choices.find(([k]) => k === 'h' || k === 'l') || choices.find(([k]) => k === UNIT) || choices[0])?.[0];
   const editing = !!condOf(f.key);
   const ph = angle ? '60 или tg = 2' : 'например, 12 или 6√3';
   return `<form class="fit" data-fitform>
     <label class="field"><span>${angle ? 'Угол по условию (в градусах или значение функции)' : 'Значение по условию задачи'}</span><input data-fitval value="${esc(f.text)}" placeholder="${esc(ph)}" spellcheck="false" autocomplete="off"></label>
-    ${choices.length ? `<label class="field"><span>Какой размер неизвестен (его и найдём)</span><select data-fitmode>${choices.map(([k, t]) => `<option value="${esc(k)}"${k === f.unknown ? ' selected' : ''}>${esc(k === UNIT ? t : rlNow(t))}</option>`).join('')}</select></label>`
+    ${choices.length ? `<label class="field"><span>Какой размер неизвестен (его и найдём)</span><select data-fitmode>${choices.map(([k, t]) => `<option value="${esc(k)}"${k === f.unknown ? ' selected' : ''}>${esc((k === UNIT ? t : rlNow(t)) + (free.has(k) ? ' (?)' : ''))}</option>`).join('')}</select></label>`
     : '<p class="err">Все размеры уже ищутся по другим условиям — удалите одно из них или задайте размер вручную.</p>'}
     <div class="row">${choices.length ? `<button type="submit">${editing ? 'Сохранить' : 'Добавить условие'}</button>` : ''}${editing ? '<button type="button" data-fitdel>Удалить</button>' : ''}<button type="button" data-fitcancel>Отмена</button></div>
     ${f.err ? `<p class="err">${esc(f.err)}</p>` : ''}
@@ -768,13 +808,22 @@ $('#figure').addEventListener('change', (e) => {
     else if (key === 'hmode') state.spec = { ...state.spec, hmode: t.value, p: keepShape(t.value) };
     else state.spec = { ...state.spec, [key]: t.value };
     if (key === 'kind' || key === 'base') { state.items = []; state.conds = []; resetUi(); }
-    if (key === 'base') { state.spec.apex = 'center'; delete state.spec.names; }
+    if (key === 'base') { state.spec.apex = 'center'; delete state.spec.names; delete state.spec.free; }
     state.spec = harmonize(state.spec);
     ui.tool = null; ui.picked = [];
     refresh(true);
   } else if (t.dataset.param) {
     commit();
-    state.spec = { ...state.spec, p: { ...state.spec.p, [t.dataset.param]: t.value.trim() } };
+    const key = t.dataset.param, v = t.value.trim();
+    const free = new Set(state.spec.free || []), wasFree = free.has(key);
+    if (v === '?' && key !== 'pts') {
+      free.add(key);
+      state.spec = { ...state.spec, free: [...free] };
+      return refresh(true);
+    }
+    free.delete(key);
+    state.spec = { ...state.spec, free: free.size ? [...free] : undefined, p: { ...state.spec.p, [key]: v } };
+    if (wasFree) return refresh(true);
     // если у основания стало другое число вершин, старые построения к новой фигуре не относятся
     const before = solid.verts.length;
     refresh();

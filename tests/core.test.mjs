@@ -454,3 +454,18 @@ test('условия задачи решаются вместе, данные р
   assert.deepEqual([l2.spec.p.h, l2.spec.unitVal], ['a/2', '6']);
   assert.match(solveConds(lp, [], [{ target: { src: 'figure', key: 'volume' }, text: '36', unknown: 'h', deg: 3 }]).error, /через a/);
 });
+
+test('незаданный размер: какие ответы от него зависят', async () => {
+  const { solveConds, freeDeps } = await import('../src/geom/fit.js');
+  const sp = { ...defaultSpec('pyramid'), base: 'tri', free: ['a'], p: { ...defaultSpec('pyramid').p, a: '6', h: '5' } };
+  const items = [
+    { id: 'g', kind: 'anglePP', refs: ['v0', 'v1', 'v3', 'v0', 'v1', 'v2'] },
+    { id: 'e', kind: 'angleLP', refs: ['v3', 'v0', 'v0', 'v1', 'v2'] },
+    { id: 'd', kind: 'dist', refs: ['v3', 'v0'] },
+  ];
+  const conds = [{ target: { src: 'item', id: 'g', idx: 0, word: 'Угол' }, text: '60', unknown: 'h', deg: 'angle' }];
+  const r = solveConds(sp, items, conds);
+  const deps = freeDeps(r.spec, items, conds, ['a']);
+  assert.ok(deps.has('figure|volume') && deps.has('d|0'));
+  assert.ok(!deps.has('g|0') && !deps.has('e|0')); // углы от стороны основания не зависят
+});

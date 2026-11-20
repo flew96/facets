@@ -5,7 +5,7 @@
 //  • затем «угадываем» точное значение каждого неизвестного (p/q или √(p/q))
 //    и проверяем все условия точной арифметикой. Если точного решения нет, фигура не меняется:
 //    программа обещает точные ответы.
-import { Num, N, ONE, parseNum, parseDim, parseQty, sqrtNum, valToNumber, fmtNum, fmtApprox, unitStr } from '../math/num.js';
+import { Num, N, ONE, parseNum, parseDim, parseQty, sqrtNum, valToNumber, fmtNum, fmtVal, fmtApprox, unitStr } from '../math/num.js';
 import { KINDS, SCALARS, DEFAULT_PARAMS, buildSolid, specUnit } from './solids.js';
 import { evaluate, refsOf } from './construct.js';
 
@@ -308,6 +308,30 @@ export function condsStatus(spec, items, conds) {
     const ctx = its.length ? evaluate(S, its) : null;
     return conds.map((c) => { try { return matches(measure(S, ctx, c.target), parseTarget(c.text, c.deg, coef ? letter : null)); } catch { return false; } });
   } catch { return conds.map(() => false); }
+}
+
+/**
+ * Какие ответы зависят от незаданных («?») размеров keys: меняем их в 11/8 раза, заново решаем условия
+ * и сравниваем ответы. Возвращает множество ключей 'id|номер строки' и 'figure|volume' и т. п.; null — проверить не удалось.
+ */
+export function freeDeps(spec, items, conds, keys) {
+  if (!keys.length) return null;
+  const letter = specUnit(spec);
+  const alt = { ...spec, p: { ...spec.p } };
+  for (const k of keys) alt.p[k] = compact(parseDim(spec.p[k] ?? DEFAULT_PARAMS[k]).v.mul(N('11/8')), letter || '');
+  let sp = alt;
+  if (conds.length) { const r = solveConds(alt, items, conds); if (!r.spec) return null; sp = r.spec; }
+  const S1 = buildSolid(buildSpec(spec, conds)), S2 = buildSolid(buildSpec(sp, conds));
+  const c1 = evaluate(S1, items), c2 = evaluate(S2, items);
+  const out = new Set(), f = (v) => (v === undefined ? '' : fmtVal(v));
+  if (f(S1.volume) !== f(S2.volume)) out.add('figure|volume');
+  if (f(S1.surface) !== f(S2.surface)) out.add('figure|surface');
+  (S1.info || []).forEach((r, i) => { if (f(r[1]) !== f(S2.info?.[i]?.[1])) out.add(`figure|info:${i}`); });
+  for (const it of items) {
+    const r1 = c1.results.get(it.id), r2 = c2.results.get(it.id);
+    r1.rows.forEach((x, i) => { const y = r2.rows[i]; if (!y || y.k !== x.k || y.v !== x.v) out.add(`${it.id}|${i}`); });
+  }
+  return out;
 }
 
 /** Одно неизвестное: корни по сетке вокруг текущего значения, ближайшие — первыми */

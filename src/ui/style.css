@@ -212,3 +212,7 @@ dialog#net::backdrop { background: rgb(0 0 0 / .45); }
 .conds li.bad .mark { color: var(--err); }
 .conds li button { border: none; background: none; padding: 0 4px; color: var(--muted); }
 .conds li button:hover { color: var(--ink); }
+.field.free input { border-style: dashed; color: var(--accent); font-weight: 600; }
+.field.free small { color: var(--muted); font-size: 11px; }
+.dep { display: inline-block; font-size: 11px; color: #b45309; border: 1px solid color-mix(in srgb, #b45309 40%, transparent); border-radius: 4px; padding: 0 4px; margin-left: 2px; }
+@media (prefers-color-scheme: dark) { .dep { color: #fbbf24; border-color: color-mix(in srgb, #fbbf24 40%, transparent); } }

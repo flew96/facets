@@ -183,11 +183,11 @@ label.ratio { font: 13px system-ui, sans-serif; color: var(--muted); }
   background: var(--ink); color: var(--paper); padding: 7px 14px; border-radius: 8px; font-size: 13px;
 }
 .toast[hidden] { display: none; }
-dialog#net {
+dialog#net, dialog#fb {
   width: min(820px, 94vw); border: 1px solid var(--line); border-radius: 12px; padding: 16px;
   background: var(--panel); color: var(--ink);
 }
-dialog#net::backdrop { background: rgb(0 0 0 / .45); }
+dialog#net::backdrop, dialog#fb::backdrop { background: rgb(0 0 0 / .45); }
 #net-body svg { width: 100%; height: auto; margin: 10px 0 6px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
 .nface { fill: color-mix(in srgb, var(--face) 16%, transparent); stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; }
 .ncut { stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; }
@@ -219,3 +219,15 @@ dialog#net::backdrop { background: rgb(0 0 0 / .45); }
 .given { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .given .field { margin: 0; }
 .given button { align-self: flex-start; }
+
+/* баг / идея */
+.brand.row { align-items: flex-start; }
+.brand.row > div { margin-right: auto; }
+.feedback { font-size: 12px; padding: 4px 8px; white-space: nowrap; }
+dialog#fb { width: min(520px, 94vw); }
+#fb-form { display: flex; flex-direction: column; gap: 10px; }
+#fb-form .field { margin: 0; }
+#fb-form textarea { font: inherit; resize: vertical; }
+.fb-kind { border: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.fb-kind label, .fb-check { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+#fb-form .primary { border-color: var(--accent); }

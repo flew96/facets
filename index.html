@@ -8,9 +8,12 @@
 </head>
 <body>
   <aside class="side left">
-    <header class="brand">
-      <h1>Грани</h1>
-      <p>конструктор по стереометрии</p>
+    <header class="brand row">
+      <div>
+        <h1>Грани</h1>
+        <p>конструктор по стереометрии</p>
+      </div>
+      <button id="feedback" class="feedback" title="Сообщить о баге или предложить улучшение">Баг / идея</button>
     </header>
     <section>
       <select id="examples" aria-label="Примеры задач"></select>
@@ -64,6 +67,25 @@
       <button id="net-close">Закрыть</button>
     </header>
     <div id="net-body"></div>
+  </dialog>
+
+  <dialog id="fb" aria-labelledby="fb-title">
+    <form id="fb-form" method="dialog">
+      <header class="row">
+        <h2 id="fb-title">Баг или идея</h2>
+        <button type="button" id="fb-close">Закрыть</button>
+      </header>
+      <fieldset class="fb-kind">
+        <legend class="fine">Что это</legend>
+        <label><input type="radio" name="fb-kind" value="bug" checked> Баг — что-то работает не так</label>
+        <label><input type="radio" name="fb-kind" value="idea"> Улучшение — идея, чего не хватает</label>
+      </fieldset>
+      <label class="field"><span>Коротко</span><input id="fb-summary" required maxlength="120" autocomplete="off" placeholder="Например: не решается задача с HA и HC"></label>
+      <label class="field"><span>Подробнее</span><textarea id="fb-details" rows="6" placeholder="Что делали, что ожидали и что получилось — или как должно работать"></textarea></label>
+      <label class="fb-check"><input type="checkbox" id="fb-attach" checked> Приложить ссылку на текущую задачу (фигура, построения и условия)</label>
+      <p class="fine">Откроется страница GitHub с уже заполненным сообщением — останется нажать «Create». Нужен аккаунт GitHub; сообщение будет видно всем.</p>
+      <div class="row"><button type="submit" class="primary">Открыть на GitHub</button></div>
+    </form>
   </dialog>
 
   <script type="module" src="src/ui/app.js"></script>

@@ -1013,6 +1013,32 @@ $('#file').addEventListener('change', async (e) => {
   if (!next) return toast('Не удалось прочитать файл: это не сохранённая задача');
   replaceState({ ...next, opts: state.opts });
 });
+// ── Баг / идея: готовое сообщение в GitHub Issues ──
+const SITE = 'https://flew96.github.io/facets/';
+const ISSUES = 'https://github.com/flew96/facets/issues/new';
+const taskLink = () => `${/^https?:\/\/(localhost|127\.|\[::1\])/.test(location.origin) ? SITE : location.origin + location.pathname}#s=${encodeState()}`;
+
+$('#feedback').addEventListener('click', () => { $('#fb').showModal(); $('#fb-summary').focus(); });
+$('#fb-close').addEventListener('click', () => $('#fb').close());
+$('#fb-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const bug = $('#fb-form').querySelector('[name="fb-kind"]:checked').value === 'bug';
+  const summary = $('#fb-summary').value.trim(), details = $('#fb-details').value.trim();
+  const title = `${bug ? '[Баг]' : '[Идея]'} ${summary}`;
+  let body = details || (bug ? '_Опишите, что делали, что ожидали и что получилось._' : '_Опишите идею._');
+  const fig = KINDS[state.spec.kind]?.title + (state.spec.base ? `, основание: ${BASES[state.spec.base]?.title}` : '');
+  body += `\n\n---\nФигура: ${fig}; построений: ${state.items.length}; условий: ${state.conds.length}.`;
+  if ($('#fb-attach').checked) {
+    const link = taskLink();
+    // адрес страницы GitHub не может быть бесконечным: слишком длинную ссылку не прикладываем
+    body += link.length < 6000 ? `\n[Открыть задачу](${link})` : '\n_Ссылка на задачу слишком длинная — приложите файл (кнопка «Сохранить»)._';
+  }
+  const url = `${ISSUES}?${new URLSearchParams({ title, body, labels: bug ? 'bug' : 'enhancement' })}`;
+  window.open(url, '_blank', 'noopener');
+  $('#fb').close();
+  $('#fb-form').reset();
+});
+
 $('#copy-link').addEventListener('click', async () => {
   const url = `${location.origin}${location.pathname}#s=${encodeState()}`;
   try { await navigator.clipboard.writeText(url); toast('Ссылка на задачу скопирована'); } catch { window.prompt('Скопируйте ссылку на задачу:', url); }

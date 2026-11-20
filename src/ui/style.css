@@ -216,3 +216,6 @@ dialog#net::backdrop { background: rgb(0 0 0 / .45); }
 .field.free small { color: var(--muted); font-size: 11px; }
 .dep { display: inline-block; font-size: 11px; color: #b45309; border: 1px solid color-mix(in srgb, #b45309 40%, transparent); border-radius: 4px; padding: 0 4px; margin-left: 2px; }
 @media (prefers-color-scheme: dark) { .dep { color: #fbbf24; border-color: color-mix(in srgb, #fbbf24 40%, transparent); } }
+.given { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.given .field { margin: 0; }
+.given button { align-self: flex-start; }

@@ -12,22 +12,40 @@ export function gcd(a, b) {
 }
 
 const FACTOR_LIMIT = 3_000_000;
-const factorCache = new Map();
+const LOOSE_LIMIT = 20_000;
+const factorCache = new Map(), looseCache = new Map();
+let loose = false;
+
+/**
+ * Выполнить fn в «приближённом» режиме: большие числа раскладываются не до конца, остаток
+ * считается простым. Значения (toNumber) остаются верными, но запись может быть не самой простой,
+ * а сравнение на равенство — ненадёжным. Нужен для численного поиска, где важна только величина.
+ */
+export function approxMode(fn) {
+  const was = loose;
+  loose = true;
+  try { return fn(); } finally { loose = was; }
+}
 
 // Разложение n > 0 на простые: Map<простое, показатель>
 function factor(n) {
-  const cached = factorCache.get(n);
+  const cache = loose ? looseCache : factorCache;
+  const cached = factorCache.get(n) || cache.get(n);
   if (cached) return cached;
   const res = new Map();
   let m = n, steps = 0;
   for (let p = 2n; p * p <= m; p += p === 2n ? 1n : 2n) {
-    if (++steps > FACTOR_LIMIT) throw new Error('Слишком большие числа для точного вычисления');
+    if (++steps > (loose ? LOOSE_LIMIT : FACTOR_LIMIT)) {
+      if (!loose) throw new Error('Слишком большие числа для точного вычисления');
+      break; // остаток m считаем «простым»
+    }
     let e = 0;
     while (m % p === 0n) { m /= p; e++; }
     if (e) res.set(p, e);
   }
   if (m > 1n) res.set(m, (res.get(m) || 0) + 1);
-  factorCache.set(n, res);
+  if (loose && looseCache.size > 50_000) looseCache.clear();
+  (steps > LOOSE_LIMIT ? looseCache : factorCache).set(n, res);
   return res;
 }
 

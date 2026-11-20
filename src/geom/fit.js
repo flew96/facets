@@ -5,7 +5,7 @@
 //  • затем «угадываем» точное значение каждого неизвестного (p/q или √(p/q))
 //    и проверяем все условия точной арифметикой. Если точного решения нет, фигура не меняется:
 //    программа обещает точные ответы.
-import { Num, N, ONE, parseNum, parseDim, parseQty, sqrtNum, valToNumber, fmtNum, fmtVal, fmtApprox, unitStr } from '../math/num.js';
+import { Num, N, ONE, approxMode, parseNum, parseDim, parseQty, sqrtNum, valToNumber, fmtNum, fmtVal, fmtApprox, unitStr } from '../math/num.js';
 import { KINDS, SCALARS, DEFAULT_PARAMS, buildSolid, specUnit } from './solids.js';
 import { evaluate, refsOf } from './construct.js';
 
@@ -100,9 +100,8 @@ function matches(m, T) {
 
 /** Невязка, одинаково масштабированная для площадей, длин и углов */
 function residual(m, T) {
-  if (m.deg === 'angle') return m.val.toNumber() - T.c2.toNumber();
-  const x = valToNumber(m.val);
-  return x > 0 ? Math.log(x / T.v.toNumber()) : null;
+  if (m.deg === 'angle') return m.x - T.c2.toNumber();
+  return m.x > 0 ? Math.log(m.x / T.v.toNumber()) : null;
 }
 
 // ─────────────────────────────── масштаб ───────────────────────────────
@@ -248,7 +247,8 @@ function solve(spec, items, conds) {
     const nums = xs.map((x) => dec(x, 7));
     if (nums.some((x) => !x)) return null;
     try {
-      const ms = measures(withVals(nums));
+      // численный поиск: точная запись не нужна, только величина — считаем в приближённом режиме
+      const ms = approxMode(() => measures(withVals(nums)).map((m) => m && { deg: m.deg, x: m.deg === 'angle' ? m.val.toNumber() : valToNumber(m.val) }));
       const r = ms.map((m, i) => (m && m.deg === conds[i].deg ? residual(m, T[i]) : null));
       return r.some((x) => x === null || !Number.isFinite(x)) ? null : r;
     } catch { return null; }

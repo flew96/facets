@@ -87,6 +87,22 @@ export const EXAMPLES = [
     },
   },
   {
+    title: 'Пирамида SABCD: BH ⟂ (SAD), HA = √2, HC = 4 — объём',
+    state: {
+      spec: spec('pyramid', { base: 'sq' }, { a: '3', h: '3√14/4' }), seq: 20,
+      items: [
+        { id: 'i1', kind: 'perpPlane', color: 0, refs: v(1, 4, 0, 3) },
+        { id: 'i2', kind: 'dist', color: 1, refs: ['i1:H', 'v0'] },
+        { id: 'i3', kind: 'dist', color: 2, refs: ['i1:H', 'v2'] },
+        { id: 'i4', kind: 'angleLL', color: 3, refs: ['i1:H', 'v0', 'i1:H', 'v2'] },
+      ],
+      conds: [
+        { id: 'c1', key: 'i2|0', deg: 1, text: '√2', unknown: 'h', target: { src: 'item', id: 'i2', idx: 0, word: 'Длина' } },
+        { id: 'c2', key: 'i3|0', deg: 1, text: '4', unknown: 'a', target: { src: 'item', id: 'i3', idx: 0, word: 'Длина' } },
+      ],
+    },
+  },
+  {
     title: 'Куб: сечение, параллельное диагональной плоскости',
     state: {
       spec: spec('cube'), seq: 10,

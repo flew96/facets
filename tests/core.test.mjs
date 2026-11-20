@@ -469,3 +469,15 @@ test('незаданный размер: какие ответы от него �
   assert.ok(deps.has('figure|volume') && deps.has('d|0'));
   assert.ok(!deps.has('g|0') && !deps.has('e|0')); // углы от стороны основания не зависят
 });
+
+test('задача: BH ⟂ (SAD), HA = √2, HC = 4 — объём 9√14/4', async () => {
+  const { solveConds } = await import('../src/geom/fit.js');
+  const { EXAMPLES } = await import('../src/ui/examples.js');
+  const sp = { ...defaultSpec('pyramid'), base: 'sq', p: { ...defaultSpec('pyramid').p, a: '2', h: '3' } };
+  const ex = EXAMPLES.find((e) => e.title.startsWith('Пирамида SABCD: BH'));
+  const r = solveConds(sp, ex.state.items, ex.state.conds);
+  assert.deepEqual([r.spec.p.a, r.spec.p.h], ['3', '3√14/4']);
+  const S = buildSolid(r.spec);
+  assert.equal(fmtVal(S.volume), '9√14/4');
+  assert.equal(rows(run(S, ex.state.items)('i4'))['Угол φ'], '90°');
+});

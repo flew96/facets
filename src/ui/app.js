@@ -35,7 +35,7 @@ const freshState = (ex) => ({ opts: { alpha: 0.1, hidden: true, labels: true }, 
 
 let state = fromHash() || load() || freshState(EXAMPLES[0]);
 let solid = null, specError = null, ctx = null;
-const ui = { tool: null, picked: [], unfolded: new Set(), solOpen: new Set(), steps: null, fit: null };
+const ui = { tool: null, picked: [], unfolded: new Set(), solOpen: new Set(), steps: null, fit: null, given: { text: '', err: '' } };
 const history = [];
 const traces = new Map();
 const view = new View($('#view'));
@@ -631,12 +631,98 @@ function freeNote() {
 
 function condsHtml() {
   if (solid.round) return '';
-  return condsList() + freeNote();
+  return condsList() + givenForm() + freeNote();
 }
+
+// ── «Дано» текстом: «HA = √2, HC = 4», «V = 36» ──
+
+function givenForm() {
+  const g = ui.given;
+  return `<form class="given" data-givenform>
+    <label class="field"><span>Дано из условия — текстом</span><input data-given value="${esc(g.text)}" placeholder="HA = √2, HC = 4" spellcheck="false" autocomplete="off"></label>
+    <button type="submit">Добавить</button>
+    ${g.err ? `<p class="err">${esc(g.err)}</p>` : ''}
+    <p class="fine">Отрезок — по именам точек на чертеже (<code>HA = √2</code>, <code>SC = 5</code>), объём — <code>V = 36</code>. Нужной точки нет — сначала постройте её (например, перпендикуляр BH). Неизвестные размеры выбираются сами: сначала отмеченные знаком <code>?</code>, потом высота, сторона…</p>
+  </form>`;
+}
+
+/** «HA» → [точка H, точка A] по именам точек на чертеже (самые длинные имена — первыми) */
+function pointsByName(src) {
+  const pts = [...new Set(ctx.points.values())];
+  const names = [...new Set(pts.map((p) => p.name))].sort((a, b) => b.length - a.length);
+  const str = src.replace(/\s+/g, '').replace(/(\p{L})(\d+)/gu, (_, l, d) => l + d.replace(/\d/g, (c) => '₀₁₂₃₄₅₆₇₈₉'[c]));
+  const out = [];
+  for (let i = 0; i < str.length;) {
+    const nm = names.find((n) => str.startsWith(n, i));
+    if (!nm) {
+      const rest = str.slice(i).match(/^\p{L}[₀-₉']*/u)?.[0] || str[i];
+      throw new Error(`Точки «${rest}» на чертеже нет — сначала постройте её (например, перпендикуляр или точку на ребре).`);
+    }
+    out.push(pts.find((p) => p.name === nm));
+    i += nm.length;
+  }
+  return out;
+}
+
+/** Порядок, в котором выбираем неизвестное для нового условия */
+function pickUnknown(taken) {
+  const free = new Set(state.spec.free || []);
+  const ch = unknownChoices(state.spec).map(([k]) => k).filter((k) => !taken.has(k));
+  return ch.find((k) => free.has(k)) || ch.find((k) => k === UNIT) || ch.find((k) => k === 'h' || k === 'l') || ch[0];
+}
+
+function addGiven() {
+  const g = ui.given;
+  const parts = g.text.split(/[;\n]|,\s*(?=[^,=]+=)|\s+и\s+/).map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) { g.err = 'Введите, например, «HA = √2».'; return renderFigureInfo(); }
+  const items = state.items.map((it) => ({ ...it }));
+  let conds = [...state.conds];
+  let seq = state.seq, color = nextColor();
+  try {
+    for (const part of parts) {
+      const m = /^(.+?)=(.+)$/.exec(part);
+      if (!m) throw new Error(`«${part}»: нужна запись вида «HA = √2».`);
+      const left = m[1].trim(), text = m[2].trim();
+      let target, deg, key;
+      if (/^(V|объ[её]м)$/i.test(left)) { target = { src: 'figure', key: 'volume' }; deg = 3; key = fitKey('figure', 'volume'); }
+      else if (/^(Sполн|Sпов|S_?полн)$/i.test(left)) { target = { src: 'figure', key: 'surface' }; deg = 2; key = fitKey('figure', 'surface'); }
+      else {
+        const pts = pointsByName(left);
+        if (pts.length !== 2) throw new Error(`«${left}»: нужен отрезок из двух точек, например HA.`);
+        if (pts[0] === pts[1]) throw new Error(`«${left}»: концы отрезка совпадают.`);
+        const refs = pts.map((p) => p.ref);
+        let it = items.find((x) => x.kind === 'dist' && ((x.refs[0] === refs[0] && x.refs[1] === refs[1]) || (x.refs[0] === refs[1] && x.refs[1] === refs[0])));
+        if (!it) { it = { id: 'i' + seq++, kind: 'dist', color: color++ % COLORS.length, refs }; items.push(it); }
+        target = { src: 'item', id: it.id, idx: 0, word: 'Длина' }; deg = 1; key = fitKey(it.id, '0');
+      }
+      const old = conds.find((c) => c.key === key);
+      const taken = new Set(conds.filter((c) => c !== old).map((c) => c.unknown));
+      const unknown = old?.unknown || pickUnknown(taken);
+      if (!unknown) throw new Error('Все размеры фигуры уже ищутся по другим условиям — новому условию нечего искать.');
+      const cond = { id: old?.id || 'c' + seq++, key, deg, text, unknown, target };
+      conds = old ? conds.map((c) => (c === old ? cond : c)) : [...conds, cond];
+    }
+  } catch (e) { g.err = e.message; return renderFigureInfo(); }
+  const r = solveConds(state.spec, items, conds);
+  if (r.error) { g.err = r.error; return renderFigureInfo(); }
+  commit();
+  state.items = items; state.conds = conds; state.seq = seq; state.spec = r.spec;
+  ui.given = { text: '', err: '' };
+  refresh(true);
+  toast('Найдено: ' + conds.map((c) => `${unknownLabel(c.unknown)} = ${c.unknown === UNIT ? state.spec.unitVal : state.spec.p[c.unknown]}`).join(', '));
+}
+
+document.addEventListener('input', (e) => { if ('given' in e.target.dataset) { ui.given.text = e.target.value; ui.given.err = ''; } });
+document.addEventListener('submit', (e) => {
+  if (!e.target.matches('[data-givenform]')) return;
+  e.preventDefault();
+  addGiven();
+  $('[data-given]')?.focus();
+});
 
 function condsList() {
   const conds = state.conds || [];
-  if (!conds.length) return '<p class="fine">Дано в задаче не размер, а площадь сечения, расстояние, угол или объём? Нажмите ✎ рядом с этой величиной и введите её значение — фигура подстроится, а остальные размеры останутся как есть.</p>';
+  if (!conds.length) return '<div class="conds"><h4>Условия задачи</h4><p class="fine">Дано не размер, а площадь сечения, расстояние, угол или объём? Нажмите ✎ рядом с величиной или впишите её ниже — фигура подстроится, остальные размеры останутся как есть.</p></div>';
   const status = condError ? condsStatus(state.spec, state.items, state.conds) : conds.map(() => true);
   const found = conds.map((c) => `${esc(unknownLabel(c.unknown))} = <b>${esc(c.unknown === UNIT ? state.spec.unitVal || '?' : state.spec.p[c.unknown] ?? '?')}</b>`).join(', ');
   return `<div class="conds"><h4>Условия задачи</h4><ul>${conds.map((c, i) => `<li class="${status[i] ? 'ok' : 'bad'}"><span class="mark" aria-hidden="true">${status[i] ? '✓' : '✗'}</span><span>${esc(condLabel(c))} = <b>${esc(c.deg === 'angle' && /^\d+$/.test(c.text.trim()) ? c.text.trim() + '°' : c.text)}</b></span><button data-conddel="${esc(c.id)}" title="Удалить условие" aria-label="Удалить условие">✕</button></li>`).join('')}</ul>`

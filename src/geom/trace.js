@@ -2,10 +2,9 @@
 // две точки в одной грани → прямая в этой грани; её пересечения с рёбрами и
 // продолжениями рёбер дают новые точки в соседних гранях, и так далее.
 import { ONE } from '../math/num.js';
+import { subscript } from './construct.js';
 import { add, sub, scale, dot, cross, lerp, eqVec, isZeroVec } from '../math/vec.js';
 
-const SUB = '₀₁₂₃₄₅₆₇₈₉';
-const subscript = (k) => String(k).replace(/\d/g, (d) => SUB[d]);
 const RANK = { given: 0, vertex: 1, aux: 2 };
 
 /**

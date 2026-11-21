@@ -36,14 +36,14 @@ const PLANE_AT = { perpPlane: [1], angleLP: [2], anglePP: [0, 3], secPar: [1], n
 for (const [k, v] of Object.entries(PLANE_AT)) TOOLS[k].planeAt = v;
 
 const SUB = '₀₁₂₃₄₅₆₇₈₉';
-const subscript = (k) => (k ? String(k).replace(/\d/g, (d) => SUB[d]) : '');
+export const subscript = (k) => (k ? String(k).replace(/\d/g, (d) => SUB[d]) : '');
 export const POINT_POOL = 'KLMNPQRTEFGUVWXYZ';
 
 export function refsOf(item) {
   if (item.kind === 'point') return item.def.t === 'ratio' ? [item.def.a, item.def.b] : [];
   return item.refs || [];
 }
-const ownerOf = (ref) => (ref[0] === 'v' ? null : ref.split(':')[0]);
+export const ownerOf = (ref) => (ref[0] === 'v' ? null : ref.split(':')[0]);
 
 /** id построения и всех построений, которые от него зависят */
 export function withDependents(items, id) {

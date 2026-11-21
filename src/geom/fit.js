@@ -7,7 +7,7 @@
 //    программа обещает точные ответы.
 import { Num, N, ONE, approxMode, parseNum, parseDim, parseQty, sqrtNum, valToNumber, fmtNum, fmtVal, fmtApprox, unitStr } from '../math/num.js';
 import { KINDS, SCALARS, DEFAULT_PARAMS, buildSolid, specUnit } from './solids.js';
-import { evaluate, refsOf } from './construct.js';
+import { evaluate, refsOf, ownerOf } from './construct.js';
 
 /** Неизвестное «значение буквы-масштаба» (для фигур, заданных буквой) */
 export const UNIT = '@unit';
@@ -153,7 +153,6 @@ export function unknownChoices(spec) {
   return out;
 }
 
-const ownerOf = (ref) => (ref[0] === 'v' ? null : ref.split(':')[0]);
 
 /** Построения, от которых зависят условия (с их зависимостями), в исходном порядке */
 export function relevantItems(items, conds) {

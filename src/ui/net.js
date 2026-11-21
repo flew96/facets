@@ -2,11 +2,7 @@
 // Грани раскладываются обходом в ширину от основания: каждая новая грань
 // «отгибается» вокруг общего ребра с уже разложенной соседкой.
 
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const unit = (a) => { const l = Math.hypot(...a) || 1; return a.map((x) => x / l); };
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+import { esc, dot, sub, cross, unit } from './util.js';
 
 /** Для каждой грани — отображение точки грани (3D) в плоскость развёртки */
 function unfold(verts, faces, planes) {

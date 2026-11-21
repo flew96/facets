@@ -9,9 +9,9 @@ import { fittable, solveConds, buildSpec, unknownChoices, relevantItems, condsSt
 import { View, HOME } from './view.js';
 import { netSvg } from './net.js';
 import { EXAMPLES } from './examples.js';
+import { esc, dot as dotF, gcd } from './util.js';
 
 const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const COLORS = ['#c2410c', '#1d4ed8', '#15803d', '#9333ea', '#be123c', '#0e7490'];
 const STORE = 'facets.v1';
 const SNAP = 12; // точки на рёбрах и гранях привязываются к двенадцатым долям
@@ -99,8 +99,6 @@ function traceOf(id) {
   traces.set(id, tr);
   return tr;
 }
-
-const dotF = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 /** Часть фигуры по одну сторону от плоскости g(p) = keep·(n·p − d) ≥ 0 — тоже выпуклый многогранник */
 function cutSolid(verts, faces, planes, n, d, keep) {
@@ -217,8 +215,6 @@ function addPoint(def) {
   ctx = evalNow();
   return id;
 }
-
-const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 
 /** Привязка клика: ребро → точка в «хорошем» отношении, грань → точка с рациональными координатами */
 function snapPick(pk) {

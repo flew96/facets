@@ -311,3 +311,18 @@ export function buildSolid(spec) {
     surface: sumVals(facePts.map(polygonArea)),
   };
 }
+
+/**
+ * После смены фигуры или основания появляются поля со значениями по умолчанию — числами.
+ * Если остальные размеры буквенные, записываем их через ту же букву: 3 → 3a.
+ */
+export function harmonize(spec) {
+  const u = specUnit(spec);
+  if (!u) return spec;
+  const p = { ...spec.p };
+  for (const [key, , mode] of KINDS[spec.kind].params(spec)) {
+    if (mode === 'pts' || SCALARS.includes(key)) continue;
+    try { const d = parseDim(p[key] ?? DEFAULT_PARAMS[key]); if (!d.sym && !d.v.isZero()) p[key] = fmtNum(d.v, u); } catch { /* оставляем как есть */ }
+  }
+  return { ...spec, p };
+}

@@ -1,6 +1,6 @@
 import { fmtNum, fmtVal, fmtApprox, valToNumber, isPlain, parseNum, parseDim, unitStr } from '../math/num.js';
 import { toFloat } from '../math/vec.js';
-import { KINDS, BASES, DEFAULT_PARAMS, SCALARS, buildSolid, defaultSpec, specUnit, parseNames, relabel } from '../geom/solids.js';
+import { KINDS, BASES, SCALARS, DEFAULT_PARAMS, buildSolid, defaultSpec, specUnit, parseNames, relabel, harmonize } from '../geom/solids.js';
 import { TOOLS, POINT_POOL, evaluate, withDependents } from '../geom/construct.js';
 import { roundTools, roundToolGroups, evaluateRound, ANGLE_STEP } from '../geom/round.js';
 import { buildTrace } from '../geom/trace.js';
@@ -10,6 +10,9 @@ import { View, HOME } from './view.js';
 import { netSvg } from './net.js';
 import { EXAMPLES } from './examples.js';
 import { esc, dot as dotF, gcd } from './util.js';
+import { validState, encodeState as encodeTask, decodeState, packState } from './state.js';
+import { cutSolid } from './cut.js';
+import { publicLink, issueUrl } from './feedback.js';
 
 const $ = (s) => document.querySelector(s);
 const COLORS = ['#c2410c', '#1d4ed8', '#15803d', '#9333ea', '#be123c', '#0e7490'];
@@ -31,7 +34,7 @@ const toolsNow = () => (solid?.round ? roundTools(solid.shape) : TOOLS);
 const groupsNow = () => (solid.round ? roundToolGroups(solid.shape) : TOOL_GROUPS);
 const evalNow = () => (solid.round ? evaluateRound : evaluate)(solid, state.items);
 
-const freshState = (ex) => ({ opts: { alpha: 0.1, hidden: true, labels: true }, conds: [], ...structuredClone(ex.state) });
+const freshState = (ex) => validState(structuredClone(ex.state)).state;
 
 let state = fromHash() || load() || freshState(EXAMPLES[0]);
 let solid = null, specError = null, ctx = null;
@@ -40,8 +43,13 @@ const history = [];
 const traces = new Map();
 const view = new View($('#view'));
 
-function valid(s) { return s && s.spec && KINDS[s.spec.kind] && Array.isArray(s.items) ? { opts: { alpha: 0.1, hidden: true, labels: true }, seq: 1000, ...s, conds: Array.isArray(s.conds) ? s.conds : [] } : null; }
-function load() { try { return valid(JSON.parse(localStorage.getItem(STORE))); } catch { return null; } }
+/** Проверенное состояние или null; о выброшенных испорченных построениях сообщаем */
+function valid(s, where) {
+  const r = validState(s);
+  if (r?.dropped) setTimeout(() => toast(`${where}: пропущено испорченных построений и условий — ${r.dropped}`));
+  return r?.state ?? null;
+}
+function load() { try { return valid(JSON.parse(localStorage.getItem(STORE)), 'Сохранённая задача'); } catch { return null; } }
 function save() { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* хранилище недоступно */ } }
 function commit() { history.push(JSON.stringify(state)); if (history.length > 100) history.shift(); }
 function resetUi() { ui.tool = null; ui.picked = []; ui.steps = null; ui.fit = null; ui.unfolded.clear(); ui.solOpen.clear(); view.preview = null; }
@@ -54,21 +62,15 @@ function undo() {
 function replaceState(next) { commit(); state = next; resetUi(); syncViewControls(); refresh(true); }
 
 // Ссылка на задачу: всё состояние упаковано в адрес после #
-function encodeState() {
-  const bytes = new TextEncoder().encode(JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq, conds: state.conds }));
-  let bin = '';
-  bytes.forEach((b) => { bin += String.fromCharCode(b); });
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
+const encodeState = () => encodeTask(state);
 function fromHash() {
   const m = /^#s=([\w-]+)$/.exec(location.hash);
   if (!m) return null;
-  try {
-    const bin = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
-    const s = valid(JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)))));
-    window.history.replaceState(null, '', location.pathname);
-    return s;
-  } catch { return null; }
+  const r = decodeState(m[1]);
+  if (!r) return null;
+  window.history.replaceState(null, '', location.pathname);
+  if (r.dropped) setTimeout(() => toast(`Ссылка на задачу: пропущено испорченных построений и условий — ${r.dropped}`));
+  return r.state;
 }
 
 // ───────────────────────────── пересчёт и сцена ─────────────────────────────
@@ -98,48 +100,6 @@ function traceOf(id) {
   if (it && it.kind === 'section' && sec && !sec.onFace) { try { tr = buildTrace(solid, sec, ctx.used); } catch { tr = null; } }
   traces.set(id, tr);
   return tr;
-}
-
-/** Часть фигуры по одну сторону от плоскости g(p) = keep·(n·p − d) ≥ 0 — тоже выпуклый многогранник */
-function cutSolid(verts, faces, planes, n, d, keep) {
-  const g = (p) => keep * (dotF(n, p) - d);
-  const eps = 1e-9 * Math.max(...verts.map((v) => Math.hypot(...v)));
-  const outV = [], index = new Map();
-  const id = (p) => {
-    const key = p.map((x) => x.toFixed(7)).join(',');
-    if (!index.has(key)) { index.set(key, outV.length); outV.push(p); }
-    return index.get(key);
-  };
-  const outF = [], outP = [], cap = new Set();
-  faces.forEach((f, fi) => {
-    const poly = [];
-    f.forEach((vi, i) => {
-      const a = verts[vi], b = verts[f[(i + 1) % f.length]], ga = g(a), gb = g(b);
-      if (ga >= -eps) poly.push(a);
-      if ((ga > eps && gb < -eps) || (ga < -eps && gb > eps)) poly.push(a.map((x, k) => x + ((b[k] - x) * ga) / (ga - gb)));
-    });
-    const ids = [...new Set(poly.map(id))];
-    if (ids.length < 3) return;
-    outF.push(ids); outP.push(planes[fi]);
-    for (const p of poly) if (Math.abs(g(p)) <= eps * 10) cap.add(id(p));
-  });
-  if (cap.size >= 3) {
-    const ids = [...cap], c = [0, 1, 2].map((k) => ids.reduce((s, i) => s + outV[i][k], 0) / ids.length);
-    const e1 = outV[ids[0]].map((x, k) => x - c[k]);
-    const e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]];
-    ids.sort((i, j) => {
-      const a = outV[i].map((x, k) => x - c[k]), b = outV[j].map((x, k) => x - c[k]);
-      return Math.atan2(dotF(a, e2), dotF(a, e1) * Math.hypot(...n)) - Math.atan2(dotF(b, e2), dotF(b, e1) * Math.hypot(...n));
-    });
-    const l = Math.hypot(...n), u = n.map((x) => (-keep * x) / l);
-    outF.push(ids); outP.push({ n: u, d: dotF(u, outV[ids[0]]) });
-  }
-  const seen = new Set(), edges = [];
-  for (const f of outF) f.forEach((a, i) => {
-    const b = f[(i + 1) % f.length], key = a < b ? `${a}-${b}` : `${b}-${a}`;
-    if (!seen.has(key)) { seen.add(key); edges.push([a, b]); }
-  });
-  return { verts: outV, faces: outF, planes: outP, edges, inside: (p) => g(p) >= -eps * 10 };
 }
 
 function buildScene() {
@@ -333,21 +293,6 @@ view.onHover = (x, y) => {
 
 /** Числовое значение размера для положения ползунка (сам размер остаётся точным); для «3a/2» — множитель 1,5 */
 function approxOf(raw) { try { return parseDim(raw).v.toNumber(); } catch { return NaN; } }
-
-/**
- * После смены фигуры или основания появляются поля со значениями по умолчанию — числами.
- * Если остальные размеры буквенные, записываем их через ту же букву: 3 → 3a.
- */
-function harmonize(spec) {
-  const u = specUnit(spec);
-  if (!u) return spec;
-  const p = { ...spec.p };
-  for (const [key, , mode] of KINDS[spec.kind].params(spec)) {
-    if (mode === 'pts' || SCALARS.includes(key)) continue;
-    try { const d = parseDim(p[key] ?? DEFAULT_PARAMS[key]); if (!d.sym && !d.v.isZero()) p[key] = fmtNum(d.v, u); } catch { /* оставляем как есть */ }
-  }
-  return { ...spec, p };
-}
 
 /**
  * При переключении «высота ↔ боковое ребро» новое поле заполняем значением,
@@ -998,38 +943,31 @@ exSel.addEventListener('change', () => {
   if (ex.steps) { ui.steps = { id: ex.steps, k: 0 }; refresh(); }
 });
 
-$('#save-file').addEventListener('click', () => download('задача.facets.json', JSON.stringify({ spec: state.spec, items: state.items, seq: state.seq, conds: state.conds }, null, 2), 'application/json'));
+$('#save-file').addEventListener('click', () => download('задача.facets.json', JSON.stringify(packState(state), null, 2), 'application/json'));
 $('#open-file').addEventListener('click', () => $('#file').click());
 $('#file').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
   let next = null;
-  try { next = valid(JSON.parse(await file.text())); } catch { /* не JSON */ }
+  try { next = valid(JSON.parse(await file.text()), 'Файл задачи'); } catch { /* не JSON */ }
   if (!next) return toast('Не удалось прочитать файл: это не сохранённая задача');
   replaceState({ ...next, opts: state.opts });
 });
 // ── Баг / идея: готовое сообщение в GitHub Issues ──
-const SITE = 'https://flew96.github.io/facets/';
-const ISSUES = 'https://github.com/flew96/facets/issues/new';
-const taskLink = () => `${/^https?:\/\/(localhost|127\.|\[::1\])/.test(location.origin) ? SITE : location.origin + location.pathname}#s=${encodeState()}`;
+const taskLink = () => publicLink(location.origin, location.pathname, encodeState());
 
 $('#feedback').addEventListener('click', () => { $('#fb').showModal(); $('#fb-summary').focus(); });
 $('#fb-close').addEventListener('click', () => $('#fb').close());
 $('#fb-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const bug = $('#fb-form').querySelector('[name="fb-kind"]:checked').value === 'bug';
-  const summary = $('#fb-summary').value.trim(), details = $('#fb-details').value.trim();
-  const title = `${bug ? '[Баг]' : '[Идея]'} ${summary}`;
-  let body = details || (bug ? '_Опишите, что делали, что ожидали и что получилось._' : '_Опишите идею._');
-  const fig = KINDS[state.spec.kind]?.title + (state.spec.base ? `, основание: ${BASES[state.spec.base]?.title}` : '');
-  body += `\n\n---\nФигура: ${fig}; построений: ${state.items.length}; условий: ${state.conds.length}.`;
-  if ($('#fb-attach').checked) {
-    const link = taskLink();
-    // адрес страницы GitHub не может быть бесконечным: слишком длинную ссылку не прикладываем
-    body += link.length < 6000 ? `\n[Открыть задачу](${link})` : '\n_Ссылка на задачу слишком длинная — приложите файл (кнопка «Сохранить»)._';
-  }
-  const url = `${ISSUES}?${new URLSearchParams({ title, body, labels: bug ? 'bug' : 'enhancement' })}`;
+  const figure = KINDS[state.spec.kind]?.title + (state.spec.base ? `, основание: ${BASES[state.spec.base]?.title}` : '');
+  const url = issueUrl({
+    bug, figure, items: state.items.length, conds: state.conds.length,
+    summary: $('#fb-summary').value.trim(), details: $('#fb-details').value.trim(),
+    link: $('#fb-attach').checked ? taskLink() : undefined,
+  });
   window.open(url, '_blank', 'noopener');
   $('#fb').close();
   $('#fb-form').reset();

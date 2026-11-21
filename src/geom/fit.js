@@ -47,7 +47,6 @@ function square(v) {
 }
 
 const SPECIAL_DEG = { 0: N(1), 30: N('3/4'), 45: N('1/2'), 60: N('1/4'), 90: N(0) };
-const toDeg = (c2) => (Math.acos(Math.sqrt(Math.min(1, Math.max(0, c2.toNumber())))) * 180) / Math.PI;
 
 /**
  * Разбор значения из условия.

@@ -40,6 +40,13 @@ const EXPLAIN = {
     return out;
   },
 
+  centroid(it, ctx) {
+    const [a, b, c] = it.refs.map((r) => ctx.get(r));
+    const g = ctx.points.get(`${it.id}:G`);
+    return [coords(a, b, c),
+      `Точка пересечения медиан делит каждую медиану в отношении 2 : 1, считая от вершины, поэтому её координаты — среднее арифметическое координат вершин: ${g.name} = (${a.name} + ${b.name} + ${c.name}) / 3 = ${vv(g.pos)}.`];
+  },
+
   perpLine(it, ctx) {
     const [p, a, b] = it.refs.map((r) => ctx.get(r));
     const u = sub(b.pos, a.pos), ap = sub(p.pos, a.pos), t = dot(ap, u).div(len2(u));

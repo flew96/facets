@@ -117,6 +117,23 @@ export const EXAMPLES = [
     },
   },
   {
+    // O и O₁ — центры описанных окружностей; у правильного треугольника это центр грани
+    title: 'Призма ABCA₁B₁C₁: AB = 6, AA₁ = 4, AM = BN = 3 — медианы CMN и расстояние от C₁ до (CMN)',
+    state: {
+      spec: spec('prism', { base: 'tri' }, { a: '6', h: '4' }), seq: 20,
+      items: [
+        ratio('i1', 'M', 0, 3, '3', '1'), ratio('i2', 'N', 1, 4, '3', '1'),
+        { id: 'i3', kind: 'point', name: 'O', color: 0, def: { t: 'center', f: 0 } },
+        { id: 'i4', kind: 'point', name: 'O₁', color: 0, def: { t: 'center', f: 1 } },
+        { id: 'i5', kind: 'centroid', color: 0, refs: ['v2', 'i1', 'i2'] },
+        // а) прямая OO₁ пересекает плоскость CMN как раз в точке пересечения медиан
+        { id: 'i6', kind: 'linePlane', color: 1, refs: ['i3', 'i4', 'v2', 'i1', 'i2'] },
+        // б) расстояние от C₁ до плоскости CMN
+        { id: 'i7', kind: 'perpPlane', color: 2, refs: ['v5', 'v2', 'i1', 'i2'] },
+      ],
+    },
+  },
+  {
     title: 'Куб: сечение, параллельное диагональной плоскости',
     state: {
       spec: spec('cube'), seq: 10,

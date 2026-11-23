@@ -482,6 +482,29 @@ test('задача: BH ⟂ (SAD), HA = √2, HC = 4 — объём 9√14/4', as
   assert.equal(rows(run(S, ex.state.items)('i4'))['Угол φ'], '90°');
 });
 
+test('задача: призма ABCA₁B₁C₁, AM = BN = 3 — точка пересечения медиан CMN на OO₁, расстояние 2√3', async () => {
+  const { EXAMPLES } = await import('../src/ui/examples.js');
+  const { explain } = await import('../src/geom/explain.js');
+  const ex = EXAMPLES.find((e) => e.title.startsWith('Призма ABCA₁B₁C₁: AB = 6'));
+  const S = buildSolid(ex.state.spec);
+  const ctx = evaluate(S, ex.state.items);
+  const r = (id) => ctx.results.get(id);
+  assert.equal(rows(r('i5'))['Точка'], 'G');
+  // прямая OO₁ пересекает (CMN) ровно в G — значит, OO₁ содержит G (и G — середина OO₁)
+  assert.equal(rows(r('i6'))['Точка пересечения'], 'G');
+  assert.equal(rows(r('i6'))['OG : GO₁'], '1 : 1');
+  assert.equal(rows(r('i7'))['Расстояние C₁H'], '2√3');
+  assert.match(explain(ex.state.items[4], ctx).at(-1), /G = \(C \+ M \+ N\) \/ 3/);
+  // то же другим способом: расстояние от G до прямой OO₁ равно нулю
+  const pl = run(S, [...ex.state.items, { id: 'i8', kind: 'perpLine', refs: ['i5:G', 'i3', 'i4'] }]);
+  assert.equal(rows(pl('i8'))['Расстояние'], '0');
+  // вырожденный «треугольник»
+  const C = solid('cube');
+  const bad = run(C, [mid(C, 'i1', 'K', 'A', 'B'), { id: 'a', kind: 'centroid', refs: [v(C, 'A'), 'i1', v(C, 'B')] }, { id: 'b', kind: 'centroid', refs: [v(C, 'A'), v(C, 'A'), v(C, 'B')] }]);
+  assert.match(bad('a').error, /одной прямой/);
+  assert.match(bad('b').error, /совпадают/);
+});
+
 test('задача: SABC, AB = 30, SA = 28, плоскость через MN ⟂ основанию', async () => {
   const { EXAMPLES } = await import('../src/ui/examples.js');
   const ex = EXAMPLES.find((e) => e.title.startsWith('Пирамида SABC: AB = 30'));

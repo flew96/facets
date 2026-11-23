@@ -10,6 +10,7 @@ export const TOOLS = {
   point: { title: 'Точка на фигуре', hint: 'Кликните по вершине, ребру или грани', free: true },
   ratio: { title: 'Точка на отрезке', slots: ['начало отрезка', 'конец отрезка'] },
   center: { title: 'Центр грани', face: true, hint: 'Кликните по грани' },
+  centroid: { title: 'Точка пересечения медиан', slots: ['1-я вершина треугольника', '2-я вершина треугольника', '3-я вершина треугольника'] },
   section: { title: 'Сечение', slots: ['1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
   perpPlane: { title: 'Перпендикуляр к плоскости', slots: ['точка, из которой опускаем', '1-я точка плоскости', '2-я точка плоскости', '3-я точка плоскости'] },
   perpLine: { title: 'Перпендикуляр к прямой', slots: ['точка, из которой опускаем', '1-я точка прямой', '2-я точка прямой'] },
@@ -478,6 +479,29 @@ export const EVAL = {
     } else if (outside(t)) notes.push(`Точка ${X.name} лежит на продолжении отрезка ${l.name}.`);
     rows.push(row(ctx.solid, `${l.a.name}${X.name}`, rootOf(len2(sub(pos, l.a.pos))), 1));
     return { title, rows, notes, draw };
+  },
+
+  centroid(it, ctx) {
+    const T = it.refs.map((r) => ctx.get(r));
+    const tri = T.map((p) => p.name).join('');
+    const title = `Точка пересечения медиан ${tri}`;
+    if (isZeroVec(cross(sub(T[1].pos, T[0].pos), sub(T[2].pos, T[0].pos)))) {
+      const same = [[0, 1], [0, 2], [1, 2]].find(([i, j]) => eqVec(T[i].pos, T[j].pos));
+      return { title, error: same ? `Точки ${T[same[0]].name} и ${T[same[1]].name} совпадают — треугольника нет.` : `Точки ${T.map((p) => p.name).join(', ')} лежат на одной прямой — треугольника нет.` };
+    }
+    const G = ctx.reg(it, 'G', scale(T.map((p) => p.pos).reduce(add), N(3).inv()), 'G');
+    // медиана из каждой вершины — к середине противоположной стороны
+    const mids = T.map((_, i) => lerp(T[(i + 1) % 3].pos, T[(i + 2) % 3].pos, N('1/2')));
+    return {
+      title,
+      rows: [text('Точка', G.name)],
+      notes: [`${G.name} делит каждую медиану в отношении 2 : 1, считая от вершины, а её координаты — среднее арифметическое координат ${T.map((p) => p.name).join(', ')}.`],
+      draw: {
+        polys: [{ pts: T.map((p) => p.pos), cls: 'ghost' }],
+        segs: [...T.map((p, i) => ({ a: p.pos, b: T[(i + 1) % 3].pos, cls: 'aux' })), ...T.map((p, i) => ({ a: p.pos, b: mids[i], cls: 'ext' }))],
+        dots: mids,
+      },
+    };
   },
 
   pyrVol(it, ctx) {

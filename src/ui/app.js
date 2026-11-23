@@ -21,7 +21,7 @@ const SNAP = 12; // точки на рёбрах и гранях привязы�
 const SECTIONS = ['section', 'secPar', 'secPerp', 'secPar2'];
 
 const TOOL_GROUPS = [
-  ['Точки', ['point', 'ratio', 'center', 'linePlane']],
+  ['Точки', ['point', 'ratio', 'center', 'centroid', 'linePlane']],
   ['Прямые через точку', ['parLine', 'perpLineThru', 'normLine']],
   ['Сечения', ['section', 'secPar', 'secPerp', 'secPar2']],
   ['Перпендикуляры', ['perpPlane', 'perpLine', 'commonPerp']],
